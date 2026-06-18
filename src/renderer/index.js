@@ -14,6 +14,8 @@ const stopBtn = document.getElementById('stopBtn');
 const recBanner = document.getElementById('recBanner');
 const timerEl = document.getElementById('timer');
 const topStatus = document.getElementById('topStatus');
+const permBanner = document.getElementById('permBanner');
+const openScreenSettingsBtn = document.getElementById('openScreenSettingsBtn');
 
 const camPreviewBox = document.getElementById('camPreviewBox');
 const camPreview = document.getElementById('camPreview');
@@ -46,7 +48,6 @@ let streams = [];
 let isRecording = false;
 let sources = []; // current list for the active tab
 let previewStream = null; // live screen-preview capture
-let screenPermPrompted = false; // only auto-prompt for screen access once per load
 
 // Live webcam preview + background-blur pipeline.
 const camProcessor = new CameraProcessor(camPreview);
@@ -67,26 +68,44 @@ const SOURCE_HINTS = {
     '💡 Picking a browser records the whole window (the tab in front). To capture <b>one tab only</b>, drag it out into its own window first, then hit ↻ Refresh.',
 };
 
+// Show/hide the persistent "Screen Recording is off" banner. Returns true when
+// access is denied so callers can also block the action. No-op on Windows/Linux
+// (status is always 'granted' there).
+async function refreshScreenPermission() {
+  const status = await window.api.screenStatus();
+  const denied = status === 'denied' || status === 'restricted';
+  permBanner.classList.toggle('active', denied);
+  return denied;
+}
+
+if (openScreenSettingsBtn) {
+  openScreenSettingsBtn.addEventListener('click', () => window.api.openScreenSettings());
+}
+
 async function loadSources() {
   const hintEl = document.getElementById('sourceHint');
   if (hintEl) hintEl.innerHTML = SOURCE_HINTS[currentKind] || '';
 
   const prevId = selectedSource && selectedSource.id;
-  sources = await window.api.listSources({ types: [currentKind] });
+  // On macOS, getSources() throws "Failed to get sources" when Screen Recording
+  // is denied (and returns black thumbnails we filter out when not-determined),
+  // so an error or empty result both mean "no usable sources".
+  try {
+    sources = await window.api.listSources({ types: [currentKind] });
+  } catch (err) {
+    console.warn('listSources failed:', err.message);
+    sources = [];
+  }
   sourceSelect.innerHTML = '';
 
   if (!sources.length) {
     // On macOS an empty Screens list almost always means Screen Recording is
     // denied (the OS hands back black thumbnails, which we filter out above).
-    let denied = false;
-    if (currentKind === 'screen') {
-      const status = await window.api.screenStatus();
-      denied = status === 'denied' || status === 'restricted';
-    }
+    const denied = currentKind === 'screen' && (await refreshScreenPermission());
     const opt = document.createElement('option');
     opt.value = '';
     opt.textContent = denied
-      ? 'Screen Recording permission needed — see below'
+      ? 'Screen Recording permission needed — see banner above'
       : `No ${currentKind === 'screen' ? 'screens' : 'open windows'} found — try ↻ Refresh`;
     sourceSelect.appendChild(opt);
     selectedSource = null;
@@ -96,10 +115,6 @@ async function loadSources() {
       previewPlaceholder.textContent =
         'Screen Recording is turned off for this app. Enable it in System Settings, then quit and reopen.';
       previewPlaceholder.style.display = 'block';
-      if (!screenPermPrompted) {
-        screenPermPrompted = true;
-        window.api.ensureScreenPermission(); // shows the native "Open System Settings" dialog
-      }
     }
     return;
   }
@@ -561,6 +576,14 @@ function applyHomePrefs() {
   await Prefs.load();
   currentKind = Prefs.get('sourceKind', 'screen');
   setTabSelected(currentKind);
+
+  // Surface a missing Screen Recording grant as soon as the app opens: show the
+  // persistent banner and, if denied, pop the native "Open System Settings"
+  // dialog once. (No-op on Windows/Linux.)
+  if (await refreshScreenPermission()) {
+    window.api.ensureScreenPermission();
+  }
+
   await loadSources();
   await loadDevices();
   await camProcessor.init(); // preload the blur model (no-op if unavailable)

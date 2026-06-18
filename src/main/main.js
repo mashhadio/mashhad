@@ -168,10 +168,19 @@ ipcMain.handle('screen:ensure', async () => {
 ipcMain.handle('sources:list', async (_evt, opts) => {
   const types = (opts && opts.types) || ['screen', 'window'];
   const displays = screen.getAllDisplays();
-  const sources = await desktopCapturer.getSources({
-    types,
-    thumbnailSize: { width: 320, height: 200 },
-  });
+  // On macOS this throws when Screen Recording access is denied — treat it as
+  // "no sources" so the renderer can surface the permission banner instead of a
+  // raw IPC error.
+  let sources;
+  try {
+    sources = await desktopCapturer.getSources({
+      types,
+      thumbnailSize: { width: 320, height: 200 },
+    });
+  } catch (err) {
+    console.warn('desktopCapturer.getSources failed:', err.message);
+    return [];
+  }
 
   return sources
     .filter((s) => s.thumbnail && !s.thumbnail.isEmpty())
