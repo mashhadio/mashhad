@@ -1,0 +1,56 @@
+{
+  "name": "smooth-screen-recorder",
+  "version": "0.1.0",
+  "description": "Cross-platform screen recorder with smooth cursor zoom and microphone noise filtering",
+  "main": "src/main/main.js",
+  "author": "Abdul",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "@mediapipe/selfie_segmentation": "^0.1.1675465747",
+    "ffmpeg-static": "^5.2.0",
+    "uiohook-napi": "^1.5.4"
+  },
+  "build": {
+    "appId": "com.abdul.smoothrecorder",
+    "productName": "Smooth Screen Recorder",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**",
+      "node_modules/uiohook-napi/**",
+      "assets/**"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.video",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSCameraUsageDescription": "Smooth Screen Recorder uses your camera for the optional webcam overlay.",
+        "NSMicrophoneUsageDescription": "Smooth Screen Recorder records your microphone for narration.",
+        "NSScreenCaptureUsageDescription": "Smooth Screen Recorder records your screen."
+      }
+    },
+    "dmg": {
+      "title": "Smooth Screen Recorder"
+    }
+  }
+}

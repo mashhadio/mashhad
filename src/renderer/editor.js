@@ -1,0 +1,921 @@
+'use strict';
+
+const video = document.getElementById('srcVideo');
+const camVideo = document.getElementById('camVideo');
+const canvas = document.getElementById('preview');
+// willReadFrequently forces a CPU-backed canvas. This both speeds up the pixel
+// work and avoids a Chromium bug where MediaRecorder capturing a GPU-backed
+// canvas emits empty (green) frames in the exported video.
+const ctx = canvas.getContext('2d', { willReadFrequently: true, alpha: false });
+
+const playBtn = document.getElementById('playBtn');
+const timeLabel = document.getElementById('timeLabel');
+const timeline = document.getElementById('timeline');
+const playhead = document.getElementById('playhead');
+
+const autoZoomBtn = document.getElementById('autoZoomBtn');
+const addZoomBtn = document.getElementById('addZoomBtn');
+const clearZoomBtn = document.getElementById('clearZoomBtn');
+const zoomLevel = document.getElementById('zoomLevel');
+const zoomLevelVal = document.getElementById('zoomLevelVal');
+const zoomLevelLabel = document.getElementById('zoomLevelLabel');
+const smoothRamp = document.getElementById('smoothRamp');
+const smoothVal = document.getElementById('smoothVal');
+const noiseProfile = document.getElementById('noiseProfile');
+const audioStatus = document.getElementById('audioStatus');
+
+const camControls = document.getElementById('camControls');
+const camShow = document.getElementById('camShow');
+const camPos = document.getElementById('camPos');
+const camShape = document.getElementById('camShape');
+const camSize = document.getElementById('camSize');
+const camSizeVal = document.getElementById('camSizeVal');
+
+const clickFx = document.getElementById('clickFx');
+const clickStyle = document.getElementById('clickStyle');
+const clickColor = document.getElementById('clickColor');
+const clickSize = document.getElementById('clickSize');
+const clickSizeVal = document.getElementById('clickSizeVal');
+const clickSound = document.getElementById('clickSound');
+const clickSoundName = document.getElementById('clickSoundName');
+const clickVol = document.getElementById('clickVol');
+const clickVolVal = document.getElementById('clickVolVal');
+
+const exportFormat = document.getElementById('exportFormat');
+const exportQuality = document.getElementById('exportQuality');
+const exportResolution = document.getElementById('exportResolution');
+
+const exportBtn = document.getElementById('exportBtn');
+const progress = document.getElementById('progress');
+const progressFill = document.getElementById('progressFill');
+const exportStatus = document.getElementById('exportStatus');
+const backBtn = document.getElementById('backBtn');
+const topStatus = document.getElementById('topStatus');
+
+let project = null;
+let engine = null;
+let blocks = [];
+let selectedBlock = null;
+let defaultScale = 2.0;
+let duration = 0;
+let rafId = null;
+let exporting = false;
+let camReady = false;
+
+// Cleaned-audio preview: plays the ffmpeg-denoised mic in sync with the video so
+// the noise setting can be heard before exporting.
+const cleanAudio = new Audio();
+let cleanAudioActive = false;
+let audioPreviewToken = 0;
+
+// Webcam overlay placement as the CENTRE of the overlay, in 0..1 of the frame.
+let camFx = 0.85;
+let camFy = 0.85;
+
+// Click effects
+const CLICK_FX_DUR = 0.45; // seconds
+let clickTimes = []; // click times in seconds
+let clickAudio = new Audio('../../assets/sfx/mouse.wav');
+let lastFxTime = 0;
+
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return m ? { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) } : { r: 255, g: 205, b: 60 };
+}
+
+const DEFAULT_BLOCK_LEN = 2.4;
+
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+function fmt(t) {
+  if (!isFinite(t)) t = 0;
+  const m = String(Math.floor(t / 60)).padStart(2, '0');
+  const s = String(Math.floor(t % 60)).padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+async function init() {
+  await Prefs.load();
+  project = await window.api.getProject();
+  if (!project) {
+    document.getElementById('content').innerHTML = '<div class="empty">No recording loaded.</div>';
+    return;
+  }
+
+  noiseProfile.disabled = !project.hasAudio;
+  if (!project.hasAudio) {
+    noiseProfile.value = 'off';
+    noiseProfile.title = 'No microphone was recorded';
+  }
+
+  video.src = project.videoUrl;
+  video.muted = false;
+
+  await new Promise((res) => {
+    if (video.readyState >= 1) return res();
+    video.addEventListener('loadedmetadata', res, { once: true });
+  });
+
+  duration = await resolveDuration();
+
+  canvas.width = video.videoWidth || 1920;
+  canvas.height = video.videoHeight || 1080;
+
+  if (project.hasCam && project.camUrl) {
+    await setupCam(project.camUrl);
+  }
+
+  await seekTo(0);
+
+  clickTimes = (project.cursor.clicks || []).map((c) => c.t / 1000);
+
+  applyEditorPrefs();
+
+  rebuildEngine();
+  autoZoom();
+  drawAt(0);
+  buildTimeline();
+  updateTimeLabel();
+
+  // Prepare the cleaned-audio preview in the background for the current profile.
+  if (project.hasAudio && noiseProfile.value !== 'off') applyAudioPreview(noiseProfile.value);
+}
+
+// Apply saved preferences to the editor controls, then persist on change.
+function applyEditorPrefs() {
+  if (!noiseProfile.disabled) noiseProfile.value = Prefs.get('noiseProfile', noiseProfile.value);
+
+  zoomLevel.value = Prefs.get('zoom', 2.0);
+  defaultScale = parseFloat(zoomLevel.value);
+  zoomLevelVal.textContent = `${defaultScale.toFixed(1)}×`;
+
+  smoothRamp.value = Prefs.get('smooth', 0.55);
+  smoothVal.textContent = `${parseFloat(smoothRamp.value).toFixed(2)}s`;
+
+  // Click highlight
+  clickFx.checked = Prefs.get('clickFx', true);
+  clickStyle.value = Prefs.get('clickStyle', 'ring');
+  clickColor.value = Prefs.get('clickColor', '#ffcd3c');
+  clickSize.value = Prefs.get('clickSize', 5);
+  clickSizeVal.textContent = `${clickSize.value}%`;
+
+  // Click sound
+  clickSound.checked = Prefs.get('clickSound', false);
+  const savedSound = Prefs.get('clickSoundName', 'mouse');
+  clickSoundName.value = ['mouse', 'mouse_soft'].includes(savedSound) ? savedSound : 'mouse';
+  clickAudio = new Audio(`../../assets/sfx/${clickSoundName.value}.wav`);
+  clickVol.value = Prefs.get('clickVol', 70);
+  clickVolVal.textContent = `${clickVol.value}%`;
+
+  // Webcam overlay
+  camShow.checked = Prefs.get('camShow', true);
+  camPos.value = Prefs.get('camPos', 'br');
+  const p = CAM_PRESETS[camPos.value] || CAM_PRESETS.br;
+  camFx = p[0];
+  camFy = p[1];
+  camShape.value = Prefs.get('camShape', 'circle');
+  camSize.value = Prefs.get('camSize', 24);
+  camSizeVal.textContent = `${camSize.value}%`;
+
+  // Export
+  exportFormat.value = Prefs.get('exportFormat', 'youtube');
+  exportQuality.value = Prefs.get('exportQuality', 'balanced');
+  exportResolution.value = Prefs.get('exportResolution', 'original');
+
+  // Persist on change.
+  noiseProfile.addEventListener('change', () => {
+    Prefs.set('noiseProfile', noiseProfile.value);
+    applyAudioPreview(noiseProfile.value);
+  });
+  smoothRamp.addEventListener('input', () => Prefs.set('smooth', parseFloat(smoothRamp.value)));
+  clickFx.addEventListener('change', () => Prefs.set('clickFx', clickFx.checked));
+  clickStyle.addEventListener('change', () => Prefs.set('clickStyle', clickStyle.value));
+  clickColor.addEventListener('input', () => Prefs.set('clickColor', clickColor.value));
+  clickSize.addEventListener('input', () => Prefs.set('clickSize', parseInt(clickSize.value, 10)));
+  clickSound.addEventListener('change', () => Prefs.set('clickSound', clickSound.checked));
+  clickSoundName.addEventListener('change', () => Prefs.set('clickSoundName', clickSoundName.value));
+  clickVol.addEventListener('input', () => Prefs.set('clickVol', parseInt(clickVol.value, 10)));
+  camShow.addEventListener('change', () => Prefs.set('camShow', camShow.checked));
+  camPos.addEventListener('change', () => Prefs.set('camPos', camPos.value));
+  camShape.addEventListener('change', () => Prefs.set('camShape', camShape.value));
+  camSize.addEventListener('input', () => Prefs.set('camSize', parseInt(camSize.value, 10)));
+  exportFormat.addEventListener('change', () => Prefs.set('exportFormat', exportFormat.value));
+  exportQuality.addEventListener('change', () => Prefs.set('exportQuality', exportQuality.value));
+  exportResolution.addEventListener('change', () => Prefs.set('exportResolution', exportResolution.value));
+}
+
+async function setupCam(url) {
+  camVideo.src = url;
+  camVideo.muted = true;
+  await new Promise((res) => {
+    if (camVideo.readyState >= 1) return res();
+    camVideo.addEventListener('loadedmetadata', res, { once: true });
+    camVideo.addEventListener('error', res, { once: true });
+  });
+  if (camVideo.videoWidth) {
+    camReady = true;
+    camControls.style.display = 'flex';
+  }
+}
+
+function resolveDuration() {
+  return new Promise((resolve) => {
+    if (isFinite(video.duration) && video.duration > 0) return resolve(video.duration);
+    const onTime = () => {
+      if (isFinite(video.duration)) {
+        video.removeEventListener('durationchange', onTime);
+        video.currentTime = 0;
+        resolve(video.duration);
+      }
+    };
+    video.addEventListener('durationchange', onTime);
+    video.currentTime = 1e6;
+  });
+}
+
+function seekTo(t) {
+  return new Promise((resolve) => {
+    if (camReady) camVideo.currentTime = Math.min(t, camVideo.duration || t);
+    if (cleanAudioActive) cleanAudio.currentTime = Math.min(t, cleanAudio.duration || t);
+    // If we're already at the target, no 'seeked' event fires — resolve now.
+    if (Math.abs(video.currentTime - t) < 0.02) { resolve(); return; }
+    let settled = false;
+    const done = () => { if (settled) return; settled = true; video.removeEventListener('seeked', done); resolve(); };
+    video.addEventListener('seeked', done);
+    video.currentTime = t;
+    setTimeout(done, 1500); // safety fallback
+  });
+}
+
+function rebuildEngine() {
+  engine = new ZoomEngine(project.cursor, blocks, {
+    ramp: parseFloat(smoothRamp.value),
+    smoothing: 0.22,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+function drawAt(t) {
+  if (!video.videoWidth) return;
+  engine.setBlocks(blocks);
+  engine.drawFrame(ctx, video, video.videoWidth, video.videoHeight, canvas.width, canvas.height, t);
+  drawClickFx(t);
+  drawCam();
+}
+
+function easeOutCubic(p) { return 1 - Math.pow(1 - p, 3); }
+
+// Click effect at each recent click, placed in the zoomed view. Style, colour
+// and size are user-configurable.
+function drawClickFx(t) {
+  if (!clickFx.checked || !(project.cursor.clicks || []).length) return;
+  const { r: cr, g: cg, b: cb } = hexToRgb(clickColor.value);
+  const baseR = canvas.height * (parseInt(clickSize.value, 10) / 100);
+  const style = clickStyle.value;
+
+  for (const c of project.cursor.clicks) {
+    const tc = c.t / 1000;
+    const age = t - tc;
+    if (age < 0) break; // clicks are time-ordered; the rest are in the future
+    if (age > CLICK_FX_DUR) continue;
+    const p = age / CLICK_FX_DUR;
+    const pt = engine.mapPoint(c.x, c.y, video.videoWidth, video.videoHeight, canvas.width, canvas.height, t);
+    const R = baseR * pt.scale;
+
+    if (style === 'spotlight') {
+      // Dim the whole frame except a bright circle around the click.
+      const a = 0.55 * (1 - p);
+      const inner = R * 1.6;
+      const outer = R * 4;
+      const grad = ctx.createRadialGradient(pt.x, pt.y, inner, pt.x, pt.y, outer);
+      grad.addColorStop(0, 'rgba(0,0,0,0)');
+      grad.addColorStop(1, `rgba(0,0,0,${a})`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      continue;
+    }
+
+    const off = pt.x < -R || pt.x > canvas.width + R || pt.y < -R || pt.y > canvas.height + R;
+    if (off) continue;
+
+    if (style === 'pulse') {
+      const rr = (0.5 + 0.5 * easeOutCubic(p)) * R;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, rr, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${cr},${cg},${cb},${0.5 * (1 - p)})`;
+      ctx.fill();
+      continue;
+    }
+
+    // ring (default) and double-ring share the expanding-ring base
+    const drawRing = (phase) => {
+      const pe = Math.min(1, phase);
+      const rr = (0.35 + 0.65 * easeOutCubic(pe)) * R;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, rr, 0, Math.PI * 2);
+      ctx.lineWidth = Math.max(2, baseR * 0.18 * (1 - pe) * pt.scale);
+      ctx.strokeStyle = `rgba(${cr},${cg},${cb},${0.85 * (1 - pe)})`;
+      ctx.stroke();
+    };
+    drawRing(p);
+    if (style === 'double') drawRing(p - 0.3 < 0 ? 0 : p - 0.3);
+
+    if (p < 0.35) {
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, R * 0.5, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${cr},${cg},${cb},${0.4 * (1 - p / 0.35)})`;
+      ctx.fill();
+    }
+  }
+}
+
+function roundRectPath(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+// Compute the webcam overlay rectangle in canvas pixels.
+function camRect() {
+  const cw = canvas.width;
+  const ch = canvas.height;
+  const d = (parseInt(camSize.value, 10) / 100) * ch;
+  const margin = Math.round(ch * 0.03);
+  let x = camFx * cw - d / 2;
+  let y = camFy * ch - d / 2;
+  x = clamp(x, margin, cw - d - margin);
+  y = clamp(y, margin, ch - d - margin);
+  return { x, y, d, margin };
+}
+
+function drawCam() {
+  if (!camReady || !camShow.checked) return;
+  const { x, y, d } = camRect();
+
+  const vw = camVideo.videoWidth;
+  const vh = camVideo.videoHeight;
+  const side = Math.min(vw, vh);
+  const sx = (vw - side) / 2;
+  const sy = (vh - side) / 2;
+
+  ctx.save();
+  if (camShape.value === 'circle') {
+    ctx.beginPath();
+    ctx.arc(x + d / 2, y + d / 2, d / 2, 0, Math.PI * 2);
+    ctx.clip();
+  } else {
+    roundRectPath(ctx, x, y, d, d, d * 0.14);
+    ctx.clip();
+  }
+  ctx.drawImage(camVideo, sx, sy, side, side, x, y, d, d);
+  ctx.restore();
+
+  // subtle border ring + shadow line
+  ctx.lineWidth = Math.max(2, d * 0.018);
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  if (camShape.value === 'circle') {
+    ctx.beginPath();
+    ctx.arc(x + d / 2, y + d / 2, d / 2 - ctx.lineWidth / 2, 0, Math.PI * 2);
+    ctx.stroke();
+  } else {
+    roundRectPath(ctx, x + ctx.lineWidth / 2, y + ctx.lineWidth / 2, d - ctx.lineWidth, d - ctx.lineWidth, d * 0.14);
+    ctx.stroke();
+  }
+}
+
+// When cleaned audio is active we mute the raw video track and play the cleaned
+// track instead; otherwise the video plays its own (raw) audio.
+function updateAudioRouting() {
+  video.muted = cleanAudioActive;
+}
+
+// Render (via ffmpeg) and load the cleaned mic audio for the given profile, then
+// route preview playback through it. profile === 'off' restores the raw audio.
+async function applyAudioPreview(profile) {
+  if (!project || !project.hasAudio) return;
+  const myToken = ++audioPreviewToken;
+
+  if (profile === 'off') {
+    cleanAudioActive = false;
+    cleanAudio.pause();
+    updateAudioRouting();
+    audioStatus.textContent = '';
+    return;
+  }
+
+  audioStatus.textContent = '· preparing…';
+  let url = null;
+  try {
+    url = await window.api.previewAudio(profile);
+  } catch (err) {
+    if (myToken !== audioPreviewToken) return;
+    cleanAudioActive = false; // fall back to the raw track rather than a stale one
+    cleanAudio.pause();
+    updateAudioRouting();
+    audioStatus.textContent = '· preview failed (raw audio)';
+    return;
+  }
+  if (myToken !== audioPreviewToken) return; // a newer request superseded this
+
+  if (!url) { cleanAudioActive = false; updateAudioRouting(); audioStatus.textContent = ''; return; }
+
+  cleanAudio.src = url;
+  await new Promise((res) => { cleanAudio.oncanplay = res; cleanAudio.onerror = res; });
+  if (myToken !== audioPreviewToken) return;
+
+  cleanAudioActive = true;
+  cleanAudio.currentTime = video.currentTime;
+  updateAudioRouting();
+  if (!video.paused) cleanAudio.play().catch(() => {});
+  audioStatus.textContent = '· cleaned ✓';
+}
+
+function renderLoop() {
+  drawAt(video.currentTime);
+  movePlayhead(video.currentTime);
+  updateTimeLabel();
+  playClickSounds(video.currentTime);
+  // Keep the cleaned audio locked to the video.
+  if (cleanAudioActive && !video.paused && Math.abs(cleanAudio.currentTime - video.currentTime) > 0.18) {
+    cleanAudio.currentTime = video.currentTime;
+  }
+  if (!video.paused && !video.ended) {
+    rafId = requestAnimationFrame(renderLoop);
+  }
+}
+
+// Fire the click sound for any click crossed since the last frame (preview).
+function playClickSounds(t) {
+  if (clickSound.checked) {
+    const vol = parseInt(clickVol.value, 10) / 100;
+    for (const tc of clickTimes) {
+      if (tc > t) break; // time-ordered; nothing further has happened yet
+      if (tc > lastFxTime) {
+        const a = clickAudio.cloneNode();
+        a.volume = vol;
+        a.play().catch(() => {});
+      }
+    }
+  }
+  lastFxTime = t;
+}
+
+function play() {
+  if (video.ended) {
+    video.currentTime = 0;
+    if (camReady) camVideo.currentTime = 0;
+    if (cleanAudioActive) cleanAudio.currentTime = 0;
+  }
+  lastFxTime = video.currentTime;
+  updateAudioRouting();
+  video.play();
+  if (camReady) camVideo.play().catch(() => {});
+  if (cleanAudioActive) { cleanAudio.currentTime = video.currentTime; cleanAudio.play().catch(() => {}); }
+  playBtn.textContent = '⏸ Pause';
+  renderLoop();
+}
+function pause() {
+  video.pause();
+  if (camReady) camVideo.pause();
+  cleanAudio.pause();
+  playBtn.textContent = '▶ Play';
+  if (rafId) cancelAnimationFrame(rafId);
+}
+playBtn.addEventListener('click', () => (video.paused ? play() : pause()));
+video.addEventListener('ended', () => {
+  if (camReady) camVideo.pause();
+  cleanAudio.pause();
+  playBtn.textContent = '▶ Play';
+});
+
+function updateTimeLabel() {
+  timeLabel.textContent = `${fmt(video.currentTime)} / ${fmt(duration)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Timeline rendering
+// ---------------------------------------------------------------------------
+function buildTimeline() {
+  [...timeline.querySelectorAll('.block, .click-tick')].forEach((n) => n.remove());
+  const w = timeline.clientWidth;
+
+  (project.cursor.clicks || []).forEach((c) => {
+    const tick = document.createElement('div');
+    tick.className = 'click-tick';
+    tick.style.left = `${(c.t / 1000 / duration) * w}px`;
+    timeline.appendChild(tick);
+  });
+
+  blocks.forEach((b, i) => {
+    const el = document.createElement('div');
+    el.className = 'block' + (b === selectedBlock ? ' selected' : '');
+    el.dataset.index = i;
+    layoutBlock(el, b, w);
+    el.title = `Zoom ${b.scale.toFixed(1)}× — drag to move, edges to resize, double-click to delete`;
+    el.innerHTML = `<div class="handle l"></div><span>${b.scale.toFixed(1)}×</span><div class="handle r"></div>`;
+    el.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const idx = blocks.indexOf(b);
+      if (idx >= 0) blocks.splice(idx, 1);
+      if (selectedBlock === b) selectBlock(null);
+      buildTimeline();
+      drawAt(video.currentTime);
+    });
+    timeline.appendChild(el);
+  });
+}
+
+function layoutBlock(el, b, w) {
+  el.style.left = `${(b.start / duration) * w}px`;
+  el.style.width = `${Math.max(10, ((b.end - b.start) / duration) * w)}px`;
+}
+
+function movePlayhead(t) {
+  playhead.style.left = `${(t / duration) * timeline.clientWidth}px`;
+}
+
+// ---------------------------------------------------------------------------
+// Block selection + drag/resize
+// ---------------------------------------------------------------------------
+function selectBlock(b) {
+  selectedBlock = b;
+  if (b) {
+    zoomLevel.value = b.scale;
+    zoomLevelVal.textContent = `${b.scale.toFixed(1)}×`;
+    zoomLevelLabel.innerHTML = `Selected zoom: <b id="zoomLevelVal">${b.scale.toFixed(1)}×</b>`;
+  } else {
+    zoomLevel.value = defaultScale;
+    zoomLevelVal.textContent = `${defaultScale.toFixed(1)}×`;
+    zoomLevelLabel.innerHTML = `New zoom level: <b id="zoomLevelVal">${defaultScale.toFixed(1)}×</b>`;
+  }
+  [...timeline.querySelectorAll('.block')].forEach((el) => {
+    el.classList.toggle('selected', blocks[+el.dataset.index] === selectedBlock);
+  });
+}
+
+let drag = null;
+
+timeline.addEventListener('mousedown', (e) => {
+  const blockEl = e.target.closest('.block');
+  if (blockEl) {
+    const b = blocks[+blockEl.dataset.index];
+    selectBlock(b);
+    let mode = 'move';
+    if (e.target.classList.contains('l')) mode = 'l';
+    else if (e.target.classList.contains('r')) mode = 'r';
+    drag = {
+      mode,
+      block: b,
+      el: blockEl,
+      startX: e.clientX,
+      origStart: b.start,
+      origEnd: b.end,
+      moved: false,
+    };
+    e.preventDefault();
+    return;
+  }
+  // empty timeline -> seek + deselect
+  selectBlock(null);
+  const rect = timeline.getBoundingClientRect();
+  const f = (e.clientX - rect.left) / rect.width;
+  seekAndDraw(clamp(f * duration, 0, duration));
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!drag) return;
+  const dx = e.clientX - drag.startX;
+  if (Math.abs(dx) > 2) drag.moved = true;
+  const dt = (dx / timeline.clientWidth) * duration;
+  const b = drag.block;
+  const minLen = 0.3;
+  if (drag.mode === 'move') {
+    const len = drag.origEnd - drag.origStart;
+    let ns = clamp(drag.origStart + dt, 0, duration - len);
+    b.start = ns;
+    b.end = ns + len;
+  } else if (drag.mode === 'l') {
+    b.start = clamp(drag.origStart + dt, 0, b.end - minLen);
+  } else if (drag.mode === 'r') {
+    b.end = clamp(drag.origEnd + dt, b.start + minLen, duration);
+  }
+  layoutBlock(drag.el, b, timeline.clientWidth);
+  drag.el.querySelector('span').textContent = `${b.scale.toFixed(1)}×`;
+  drawAt(video.currentTime);
+});
+
+window.addEventListener('mouseup', () => { drag = null; });
+
+function seekAndDraw(t) {
+  if (camReady) camVideo.currentTime = Math.min(t, camVideo.duration || t);
+  if (cleanAudioActive) cleanAudio.currentTime = Math.min(t, cleanAudio.duration || t);
+  video.currentTime = t;
+  lastFxTime = t;
+  drawAt(t);
+  movePlayhead(t);
+  updateTimeLabel();
+}
+
+// ---------------------------------------------------------------------------
+// Zoom editing buttons
+// ---------------------------------------------------------------------------
+function autoZoom() {
+  blocks = ZoomEngine.autoBlocks(project.cursor, { scale: defaultScale, duration });
+  selectBlock(null);
+  buildTimeline();
+  drawAt(video.currentTime);
+}
+
+function addZoomHere() {
+  const t = video.currentTime;
+  const start = Math.max(0, t - 0.2);
+  const end = Math.min(duration, start + DEFAULT_BLOCK_LEN);
+  const b = { start, end, scale: defaultScale };
+  blocks.push(b);
+  buildTimeline();
+  selectBlock(b);
+  drawAt(video.currentTime);
+}
+
+function clearZoom() {
+  blocks = [];
+  selectBlock(null);
+  buildTimeline();
+  drawAt(video.currentTime);
+}
+
+autoZoomBtn.addEventListener('click', autoZoom);
+addZoomBtn.addEventListener('click', addZoomHere);
+clearZoomBtn.addEventListener('click', clearZoom);
+
+zoomLevel.addEventListener('input', () => {
+  const v = parseFloat(zoomLevel.value);
+  const span = document.getElementById('zoomLevelVal');
+  if (span) span.textContent = `${v.toFixed(1)}×`;
+  if (selectedBlock) {
+    selectedBlock.scale = v;
+    buildTimeline();
+    selectBlock(selectedBlock);
+  } else {
+    defaultScale = v;
+    Prefs.set('zoom', v);
+  }
+  drawAt(video.currentTime);
+});
+
+smoothRamp.addEventListener('input', () => {
+  smoothVal.textContent = `${parseFloat(smoothRamp.value).toFixed(2)}s`;
+  rebuildEngine();
+  drawAt(video.currentTime);
+});
+
+// Camera control changes -> redraw
+[camShow, camShape].forEach((el) => el.addEventListener('change', () => drawAt(video.currentTime)));
+camSize.addEventListener('input', () => {
+  camSizeVal.textContent = `${camSize.value}%`;
+  drawAt(video.currentTime);
+});
+
+// Position dropdown sets a quick corner preset; the user can then fine-tune by
+// dragging the webcam directly on the preview.
+const CAM_PRESETS = { br: [0.85, 0.85], bl: [0.15, 0.85], tr: [0.85, 0.15], tl: [0.15, 0.15] };
+camPos.addEventListener('change', () => {
+  const p = CAM_PRESETS[camPos.value] || CAM_PRESETS.br;
+  camFx = p[0];
+  camFy = p[1];
+  drawAt(video.currentTime);
+});
+
+// Drag the webcam overlay anywhere on the video.
+let camDrag = null;
+function canvasPoint(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: ((e.clientX - rect.left) / rect.width) * canvas.width,
+    y: ((e.clientY - rect.top) / rect.height) * canvas.height,
+  };
+}
+canvas.addEventListener('mousedown', (e) => {
+  if (!camReady || !camShow.checked) return;
+  const p = canvasPoint(e);
+  const r = camRect();
+  if (p.x >= r.x && p.x <= r.x + r.d && p.y >= r.y && p.y <= r.y + r.d) {
+    camDrag = { offX: p.x - (r.x + r.d / 2), offY: p.y - (r.y + r.d / 2) };
+    e.preventDefault();
+  }
+});
+window.addEventListener('mousemove', (e) => {
+  if (!camDrag) return;
+  const p = canvasPoint(e);
+  camFx = clamp((p.x - camDrag.offX) / canvas.width, 0, 1);
+  camFy = clamp((p.y - camDrag.offY) / canvas.height, 0, 1);
+  drawAt(video.currentTime);
+});
+window.addEventListener('mouseup', () => { camDrag = null; });
+canvas.addEventListener('mousemove', (e) => {
+  if (!camReady || !camShow.checked) { canvas.style.cursor = 'default'; return; }
+  const p = canvasPoint(e);
+  const r = camRect();
+  const over = p.x >= r.x && p.x <= r.x + r.d && p.y >= r.y && p.y <= r.y + r.d;
+  canvas.style.cursor = over ? 'grab' : 'default';
+});
+
+[clickFx, clickStyle, clickColor].forEach((el) => el.addEventListener('change', () => drawAt(video.currentTime)));
+clickSize.addEventListener('input', () => {
+  clickSizeVal.textContent = `${clickSize.value}%`;
+  drawAt(video.currentTime);
+});
+clickVol.addEventListener('input', () => { clickVolVal.textContent = `${clickVol.value}%`; });
+
+// Jump to a click and play a short segment so the effect (and sound) is visible
+// in the preview without exporting. Each press advances to the next click.
+const testFxBtn = document.getElementById('testFxBtn');
+testFxBtn.addEventListener('click', () => {
+  if (!clickTimes.length) {
+    topStatus.textContent = 'No clicks were recorded in this clip to preview.';
+    return;
+  }
+  topStatus.textContent = '';
+  let tc = clickTimes.find((x) => x > video.currentTime + 0.05);
+  if (tc === undefined) tc = clickTimes[0]; // wrap to the first click
+  const start = Math.max(0, tc - 0.4);
+  const stopAt = Math.min(duration || tc + 0.8, tc + 0.7);
+
+  pause();
+  seekTo(start).then(() => {
+    lastFxTime = start;
+    play();
+    const watch = () => {
+      if (video.paused) return;
+      if (video.currentTime >= stopAt || video.ended) {
+        pause();
+        // Park just after the click so the ripple stays frozen on screen.
+        seekTo(tc + 0.12).then(() => {
+          drawAt(video.currentTime);
+          movePlayhead(video.currentTime);
+          updateTimeLabel();
+        });
+      } else {
+        requestAnimationFrame(watch);
+      }
+    };
+    requestAnimationFrame(watch);
+  });
+});
+clickSoundName.addEventListener('change', () => {
+  clickAudio = new Audio(`../../assets/sfx/${clickSoundName.value}.wav`);
+  // quick audition
+  if (clickSound.checked) {
+    const a = clickAudio.cloneNode();
+    a.volume = parseInt(clickVol.value, 10) / 100;
+    a.play().catch(() => {});
+  }
+});
+
+window.addEventListener('resize', () => {
+  buildTimeline();
+  movePlayhead(video.currentTime);
+});
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+async function runExport() {
+  if (exporting) return;
+  exporting = true;
+  pause();
+  exportBtn.disabled = true;
+  progress.classList.add('active');
+  progressFill.style.width = '0%';
+  exportStatus.textContent = 'Rendering zoom + webcam…';
+
+  // Use a much higher intermediate bitrate for the editing master so the
+  // canvas-render generation doesn't soften the final.
+  const interBitrate = exportFormat.value === 'master' ? 50_000_000 : 16_000_000;
+  const zoomedBuffer = await renderZoomedWebm((p) => {
+    progressFill.style.width = `${Math.round(p * 60)}%`;
+  }, interBitrate);
+
+  exportStatus.textContent = 'Encoding & cleaning audio…';
+  progressFill.style.width = '70%';
+
+  const off = window.api.onExportProgress((line) => { exportStatus.textContent = line; });
+
+  try {
+    const res = await window.api.runExport({
+      zoomedBuffer,
+      options: {
+        audioEnabled: project.hasAudio && noiseProfile.value !== 'off',
+        noiseProfile: noiseProfile.value,
+        clickSound: clickSound.checked,
+        clickTimes: clickSound.checked ? clickTimes : [],
+        clickSoundName: clickSoundName.value,
+        clickVolume: parseInt(clickVol.value, 10) / 100,
+        durationSec: duration,
+        format: exportFormat.value,
+        quality: exportQuality.value,
+        resolution: exportResolution.value,
+      },
+    });
+    off();
+    if (res.canceled) {
+      exportStatus.textContent = 'Export canceled.';
+    } else {
+      progressFill.style.width = '100%';
+      exportStatus.textContent = 'Done! Saved to ' + res.outputPath;
+      await window.api.revealFile(res.outputPath);
+    }
+  } catch (err) {
+    off();
+    exportStatus.textContent = 'Export failed: ' + err.message;
+    console.error(err);
+  } finally {
+    progress.classList.remove('active');
+    exportBtn.disabled = false;
+    exporting = false;
+  }
+}
+
+function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
+  return new Promise((resolve, reject) => {
+    // captureStream(0) = manual mode: we push exactly one frame per drawn frame
+    // via requestFrame(), so no empty/duplicated frames sneak into the encoder.
+    const stream = canvas.captureStream(0);
+    const track = stream.getVideoTracks()[0];
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9'
+      : 'video/webm;codecs=vp8';
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate });
+    const parts = [];
+    let finished = false;
+    rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
+    rec.onstop = async () => {
+      updateAudioRouting(); // restore preview audio routing
+      resolve(await new Blob(parts, { type: 'video/webm' }).arrayBuffer());
+    };
+    rec.onerror = (e) => { updateAudioRouting(); reject(e.error || new Error('Recorder error')); };
+
+    const pushFrame = () => { if (track.requestFrame) track.requestFrame(); };
+
+    const FRAME_MS = 1000 / 60; // cap capture to 60fps regardless of monitor Hz
+    let lastFrame = -1;
+
+    const begin = () => {
+      // Draw and capture the first frame BEFORE starting, so the opening
+      // keyframe has real content rather than an empty (green) buffer.
+      drawAt(0);
+      rec.start();
+      pushFrame();
+      video.play();
+      if (camReady) camVideo.play().catch(() => {});
+      const step = (now) => {
+        if (finished) return;
+        // Throttle to ~60fps so a 144Hz display doesn't produce a 144fps file.
+        if (lastFrame < 0 || now - lastFrame >= FRAME_MS - 1) {
+          lastFrame = now;
+          drawAt(video.currentTime);
+          pushFrame();
+          if (onProgress && duration) onProgress(Math.min(1, video.currentTime / duration));
+        }
+        if (video.ended || (duration && video.currentTime >= duration - 0.02)) {
+          finished = true;
+          video.pause();
+          if (camReady) camVideo.pause();
+          setTimeout(() => rec.stop(), 200);
+        } else {
+          requestAnimationFrame(step);
+        }
+      };
+      requestAnimationFrame(step);
+    };
+
+    video.pause();
+    video.muted = true;
+    if (camReady) camVideo.currentTime = 0;
+    // Seek to 0; if we're already there, start immediately (no 'seeked' fires).
+    if (video.currentTime < 0.05) {
+      begin();
+    } else {
+      const onSeeked = () => { video.removeEventListener('seeked', onSeeked); begin(); };
+      video.addEventListener('seeked', onSeeked);
+      video.currentTime = 0;
+    }
+  });
+}
+
+exportBtn.addEventListener('click', runExport);
+backBtn.addEventListener('click', () => window.api.backHome());
+
+init().catch((e) => {
+  console.error(e);
+  topStatus.textContent = 'Error: ' + e.message;
+});

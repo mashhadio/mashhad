@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: file:; style-src 'self' 'unsafe-inline';" />
+  <title>Editor · Smooth Screen Recorder</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="dot"></div>
+      <h1>Editor</h1>
+      <button class="btn-ghost" id="backBtn" style="margin-left:10px">‹ New recording</button>
+      <div class="spacer"></div>
+      <span class="status" id="topStatus"></span>
+    </div>
+
+    <div class="content" id="content">
+      <div class="editor-stage">
+        <canvas id="preview"></canvas>
+      </div>
+
+      <div class="transport">
+        <button id="playBtn">▶ Play</button>
+        <span class="time-label" id="timeLabel">00:00 / 00:00</span>
+        <div class="timeline" id="timeline">
+          <div class="playhead" id="playhead"></div>
+        </div>
+      </div>
+
+      <div class="editor-controls">
+        <div class="group">
+          <button class="btn-primary" id="autoZoomBtn">✨ Auto zoom on clicks</button>
+          <button id="addZoomBtn">＋ Zoom here</button>
+          <button id="clearZoomBtn">Clear zooms</button>
+        </div>
+        <div class="sep"></div>
+        <div class="group">
+          <div class="slider">
+            <span id="zoomLevelLabel">Zoom level: <b id="zoomLevelVal">2.0×</b></span>
+            <input type="range" id="zoomLevel" min="1.2" max="4" step="0.1" value="2.0" />
+          </div>
+          <div class="slider">
+            <span>Smoothness: <b id="smoothVal">0.55s</b></span>
+            <input type="range" id="smoothRamp" min="0.2" max="1.2" step="0.05" value="0.55" />
+          </div>
+        </div>
+        <div class="sep"></div>
+        <div class="group">
+          <div class="slider">
+            <span>Mic cleanup <span class="status" id="audioStatus" style="font-size:11px"></span></span>
+            <select id="noiseProfile">
+              <option value="off">Off</option>
+              <option value="light">Light</option>
+              <option value="medium" selected>Medium</option>
+              <option value="strong">Strong</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="editor-controls">
+        <div class="group">
+          <label class="switch"><input type="checkbox" id="clickFx" checked /> Click highlight</label>
+          <div class="slider">
+            <span>Style</span>
+            <select id="clickStyle">
+              <option value="ring" selected>Ring</option>
+              <option value="pulse">Solid pulse</option>
+              <option value="double">Double ring</option>
+              <option value="spotlight">Spotlight</option>
+            </select>
+          </div>
+          <div class="slider">
+            <span>Color</span>
+            <input type="color" id="clickColor" value="#ffcd3c" />
+          </div>
+          <div class="slider">
+            <span>Size: <b id="clickSizeVal">5%</b></span>
+            <input type="range" id="clickSize" min="2" max="12" step="1" value="5" />
+          </div>
+          <button id="testFxBtn" title="Jump to a click and preview the effect">▶ Test effect</button>
+        </div>
+        <div class="sep"></div>
+        <div class="group">
+          <label class="switch"><input type="checkbox" id="clickSound" /> Click sound</label>
+          <div class="slider">
+            <span>Sound</span>
+            <select id="clickSoundName">
+              <option value="mouse" selected>Mouse click</option>
+              <option value="mouse_soft">Mouse click (soft)</option>
+            </select>
+          </div>
+          <div class="slider">
+            <span>Volume: <b id="clickVolVal">70%</b></span>
+            <input type="range" id="clickVol" min="0" max="100" step="5" value="70" />
+          </div>
+        </div>
+      </div>
+
+      <div class="editor-controls" id="camControls" style="display:none">
+        <div class="group">
+          <label class="switch"><input type="checkbox" id="camShow" checked /> Show webcam</label>
+        </div>
+        <div class="sep"></div>
+        <div class="group">
+          <div class="slider">
+            <span>Position (or drag on video)</span>
+            <select id="camPos">
+              <option value="br" selected>Bottom-right</option>
+              <option value="bl">Bottom-left</option>
+              <option value="tr">Top-right</option>
+              <option value="tl">Top-left</option>
+            </select>
+          </div>
+          <div class="slider">
+            <span>Shape</span>
+            <select id="camShape">
+              <option value="circle" selected>Circle</option>
+              <option value="rounded">Rounded</option>
+            </select>
+          </div>
+          <div class="slider">
+            <span>Size: <b id="camSizeVal">24%</b></span>
+            <input type="range" id="camSize" min="12" max="40" step="1" value="24" />
+          </div>
+        </div>
+      </div>
+
+      <p class="hint" id="zoomHint">
+        Tip: click a zoom block on the timeline to select it, drag its middle to move it, drag its
+        edges to resize, and use <b>Zoom level</b> to change just that block. Double-click a block to delete it.
+      </p>
+
+      <div class="editor-controls">
+        <div class="group">
+          <div class="slider">
+            <span>Format</span>
+            <select id="exportFormat">
+              <option value="youtube" selected>YouTube (optimized MP4)</option>
+              <option value="master">Editing master (high bitrate)</option>
+              <option value="mp4">MP4 (H.264)</option>
+              <option value="webm">WebM (VP9)</option>
+              <option value="mov">MOV (H.264)</option>
+              <option value="gif">Animated GIF</option>
+            </select>
+          </div>
+          <div class="slider">
+            <span>Quality</span>
+            <select id="exportQuality">
+              <option value="high">High</option>
+              <option value="balanced" selected>Balanced</option>
+              <option value="small">Small file</option>
+            </select>
+          </div>
+          <div class="slider">
+            <span>Resolution</span>
+            <select id="exportResolution">
+              <option value="original" selected>Original</option>
+              <option value="1440">1440p</option>
+              <option value="1080">1080p</option>
+              <option value="720">720p</option>
+              <option value="480">480p</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="export-bar">
+        <button class="btn-primary" id="exportBtn">⬇ Export</button>
+        <div class="progress" id="progress"><div id="progressFill"></div></div>
+        <span class="status" id="exportStatus"></span>
+      </div>
+    </div>
+  </div>
+
+  <video id="srcVideo" style="display:none" playsinline></video>
+  <video id="camVideo" style="display:none" playsinline muted></video>
+  <script src="prefs.js"></script>
+  <script src="zoom-engine.js"></script>
+  <script src="editor.js"></script>
+</body>
+</html>
