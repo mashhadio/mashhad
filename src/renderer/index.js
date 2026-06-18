@@ -46,6 +46,7 @@ let streams = [];
 let isRecording = false;
 let sources = []; // current list for the active tab
 let previewStream = null; // live screen-preview capture
+let screenPermPrompted = false; // only auto-prompt for screen access once per load
 
 // Live webcam preview + background-blur pipeline.
 const camProcessor = new CameraProcessor(camPreview);
@@ -75,13 +76,31 @@ async function loadSources() {
   sourceSelect.innerHTML = '';
 
   if (!sources.length) {
+    // On macOS an empty Screens list almost always means Screen Recording is
+    // denied (the OS hands back black thumbnails, which we filter out above).
+    let denied = false;
+    if (currentKind === 'screen') {
+      const status = await window.api.screenStatus();
+      denied = status === 'denied' || status === 'restricted';
+    }
     const opt = document.createElement('option');
     opt.value = '';
-    opt.textContent = `No ${currentKind === 'screen' ? 'screens' : 'open windows'} found — try ↻ Refresh`;
+    opt.textContent = denied
+      ? 'Screen Recording permission needed — see below'
+      : `No ${currentKind === 'screen' ? 'screens' : 'open windows'} found — try ↻ Refresh`;
     sourceSelect.appendChild(opt);
     selectedSource = null;
     recordBtn.disabled = true;
     stopScreenPreview();
+    if (denied) {
+      previewPlaceholder.textContent =
+        'Screen Recording is turned off for this app. Enable it in System Settings, then quit and reopen.';
+      previewPlaceholder.style.display = 'block';
+      if (!screenPermPrompted) {
+        screenPermPrompted = true;
+        window.api.ensureScreenPermission(); // shows the native "Open System Settings" dialog
+      }
+    }
     return;
   }
 
@@ -268,6 +287,15 @@ function resetRecordingUI() {
 async function startRecording() {
   if (!selectedSource || isRecording) return;
   recordBtn.disabled = true;
+
+  // macOS gates screen capture: bail with a helpful dialog instead of silently
+  // recording a black screen. (No-op / always ok on Windows.)
+  const perm = await window.api.ensureScreenPermission();
+  if (!perm.ok) {
+    topStatus.textContent = 'Enable Screen Recording in System Settings, then quit and reopen the app.';
+    recordBtn.disabled = !selectedSource;
+    return;
+  }
 
   const display = selectedSource.display;
   const kind = selectedSource.kind || 'screen';

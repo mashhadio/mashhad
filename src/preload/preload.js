@@ -3,6 +3,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  // screen-recording permission (macOS)
+  screenStatus: () => ipcRenderer.invoke('screen:status'),
+  ensureScreenPermission: () => ipcRenderer.invoke('screen:ensure'),
+  openScreenSettings: () => ipcRenderer.invoke('screen:openSettings'),
+
   // sources
   listSources: () => ipcRenderer.invoke('sources:list'),
 

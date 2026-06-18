@@ -39,6 +39,22 @@ function ensureMacCursorPermission() {
   } catch (_) {}
 }
 
+// Deep link straight to System Settings → Privacy & Security → Screen Recording.
+const SCREEN_SETTINGS_URL =
+  'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
+
+// Unlike camera/mic, macOS has no API to *prompt* for screen recording — the
+// user must enable it manually, and the grant only takes effect after a relaunch.
+// 'granted' | 'denied' | 'restricted' | 'not-determined' ('granted' off macOS).
+function screenAccessStatus() {
+  if (!isMac) return 'granted';
+  try {
+    return systemPreferences.getMediaAccessStatus('screen');
+  } catch (_) {
+    return 'granted'; // older Electron / unknown — don't block recording
+  }
+}
+
 let mainWindow = null;
 
 // Global hotkey to start/stop recording (works even when unfocused).
@@ -105,6 +121,46 @@ function loadHome() {
 function loadEditor() {
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'editor.html'));
 }
+
+// ---------------------------------------------------------------------------
+// IPC: screen-recording permission (macOS)
+// ---------------------------------------------------------------------------
+ipcMain.handle('screen:status', async () => screenAccessStatus());
+
+ipcMain.handle('screen:openSettings', async () => {
+  if (isMac) await shell.openExternal(SCREEN_SETTINGS_URL);
+  return { ok: true };
+});
+
+// Returns { ok: true } when capture may proceed. When access is denied/restricted
+// it shows a native dialog whose primary button opens the right Settings pane,
+// and returns { ok: false } so the caller can bail instead of recording black.
+ipcMain.handle('screen:ensure', async () => {
+  const status = screenAccessStatus();
+  // 'not-determined' is left to proceed: the first capture call makes macOS show
+  // its own system prompt and add the app to the Screen Recording list.
+  if (status === 'granted' || status === 'not-determined') return { ok: true, status };
+
+  const appName = app.getName();
+  const isDev = !app.isPackaged;
+  const detail = isDev
+    ? `Open System Settings → Privacy & Security → Screen Recording and enable “Electron”, then quit and reopen the app.\n\n(In development the running binary is Electron, so the entry is named “Electron”, not “${appName}”.)`
+    : `Open System Settings → Privacy & Security → Screen Recording and enable “${appName}”, then quit and reopen the app.`;
+
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    buttons: ['Open System Settings', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Screen Recording permission needed',
+    message: 'This app isn’t allowed to record your screen yet.',
+    detail,
+  });
+  if (response === 0) {
+    try { await shell.openExternal(SCREEN_SETTINGS_URL); } catch (_) {}
+  }
+  return { ok: false, status };
+});
 
 // ---------------------------------------------------------------------------
 // IPC: capture sources
@@ -315,8 +371,8 @@ ipcMain.handle('project:get', async () => {
 });
 
 function pathToFileUrl(p) {
-  // Encodes spaces and special characters so paths like "C:\Users\John Doe\..."
-  // produce a valid file:// URL the renderer can load.
+  // Encodes spaces and special characters so paths like "/Users/John Doe/..."
+  // or "C:\Users\John Doe\..." produce a valid file:// URL the renderer can load.
   return pathToFileURL(p).href;
 }
 
