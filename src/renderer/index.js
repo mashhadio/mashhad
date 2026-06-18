@@ -17,6 +17,12 @@ const topStatus = document.getElementById('topStatus');
 const permBanner = document.getElementById('permBanner');
 const openScreenSettingsBtn = document.getElementById('openScreenSettingsBtn');
 
+const selectAreaBtn = document.getElementById('selectAreaBtn');
+const regionChip = document.getElementById('regionChip');
+const regionChipText = document.getElementById('regionChipText');
+const regionClear = document.getElementById('regionClear');
+const regionOutline = document.getElementById('regionOutline');
+
 const camPreviewBox = document.getElementById('camPreviewBox');
 const camPreview = document.getElementById('camPreview');
 const blurEnabled = document.getElementById('blurEnabled');
@@ -48,6 +54,8 @@ let streams = [];
 let isRecording = false;
 let sources = []; // current list for the active tab
 let previewStream = null; // live screen-preview capture
+let selectedRegion = null; // { x, y, w, h } in DIP rel. to the display, or null
+let cropCtl = null; // { stop() } for the region-crop draw loop while recording
 
 // Live webcam preview + background-blur pipeline.
 const camProcessor = new CameraProcessor(camPreview);
@@ -134,11 +142,80 @@ async function loadSources() {
 function selectSource(id) {
   selectedSource = sources.find((s) => s.id === id) || null;
   recordBtn.disabled = !selectedSource;
+  // A region is tied to a specific display; switching sources invalidates it.
+  selectedRegion = null;
+  updateAreaUI();
   if (selectedSource) startScreenPreview(selectedSource);
   else stopScreenPreview();
 }
 
 sourceSelect.addEventListener('change', () => selectSource(sourceSelect.value));
+
+// ---------------------------------------------------------------------------
+// Recording area (drag-to-select a sub-region of the screen)
+// ---------------------------------------------------------------------------
+function canSelectArea() {
+  return !!selectedSource && (selectedSource.kind || 'screen') === 'screen';
+}
+
+function updateAreaUI() {
+  const enabled = canSelectArea();
+  selectAreaBtn.disabled = !enabled;
+  selectAreaBtn.title = enabled
+    ? 'Drag to record only part of the screen'
+    : 'Area selection is only available for full-screen sources';
+  if (selectedRegion && enabled) {
+    regionChip.style.display = 'inline-flex';
+    regionChipText.textContent = `${selectedRegion.w} × ${selectedRegion.h}`;
+    selectAreaBtn.textContent = '⬚ Change area…';
+  } else {
+    regionChip.style.display = 'none';
+    selectAreaBtn.textContent = '⬚ Select area…';
+  }
+  updateRegionOutline();
+}
+
+// Draw the chosen region as an outline over the contained (letterboxed) preview.
+function updateRegionOutline() {
+  if (!selectedRegion || !canSelectArea()) {
+    regionOutline.style.display = 'none';
+    return;
+  }
+  const b = selectedSource.display.bounds;
+  const sw = previewStage.clientWidth;
+  const sh = previewStage.clientHeight;
+  if (!sw || !sh) return;
+  const dispAspect = b.width / b.height;
+  const stageAspect = sw / sh;
+  let vw, vh, ox, oy;
+  if (dispAspect > stageAspect) {
+    vw = sw; vh = sw / dispAspect; ox = 0; oy = (sh - vh) / 2;
+  } else {
+    vh = sh; vw = sh * dispAspect; oy = 0; ox = (sw - vw) / 2;
+  }
+  const r = selectedRegion;
+  regionOutline.style.display = 'block';
+  regionOutline.style.left = ox + (r.x / b.width) * vw + 'px';
+  regionOutline.style.top = oy + (r.y / b.height) * vh + 'px';
+  regionOutline.style.width = (r.w / b.width) * vw + 'px';
+  regionOutline.style.height = (r.h / b.height) * vh + 'px';
+}
+
+async function pickArea() {
+  if (!canSelectArea()) return;
+  let rect = null;
+  try {
+    rect = await window.api.selectRegion({ display: selectedSource.display });
+  } catch (err) {
+    console.warn('Area selection failed:', err.message);
+  }
+  if (rect && rect.w > 0 && rect.h > 0) selectedRegion = rect;
+  updateAreaUI();
+}
+
+selectAreaBtn.addEventListener('click', pickArea);
+regionClear.addEventListener('click', () => { selectedRegion = null; updateAreaUI(); });
+window.addEventListener('resize', updateRegionOutline);
 
 // ---------------------------------------------------------------------------
 // Live "what will be recorded" preview
@@ -299,6 +376,60 @@ function resetRecordingUI() {
   stopTimer();
 }
 
+// Stop every capture track and the region-crop loop, then clear the list.
+function teardownStreams() {
+  if (cropCtl) { try { cropCtl.stop(); } catch (_) {} cropCtl = null; }
+  streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
+  streams = [];
+}
+
+// desktopCapturer can only grab a whole screen, so to "record an area" we draw
+// the chosen sub-rectangle of the full capture into a canvas every frame and
+// record the canvas's stream instead. Returns the cropped MediaStream.
+async function startRegionCrop(fullStream, display, region, fps) {
+  const srcVideo = document.createElement('video');
+  srcVideo.srcObject = fullStream;
+  srcVideo.muted = true;
+  srcVideo.playsInline = true;
+  await srcVideo.play();
+  if (!srcVideo.videoWidth) {
+    await new Promise((res) => srcVideo.addEventListener('loadedmetadata', res, { once: true }));
+  }
+
+  const b = display.bounds;
+  // Region is in DIP relative to the display; scale to captured pixels.
+  const sx = srcVideo.videoWidth / b.width;
+  const sy = srcVideo.videoHeight / b.height;
+  const cx = Math.max(0, Math.round(region.x * sx));
+  const cy = Math.max(0, Math.round(region.y * sy));
+  // Keep the crop inside the frame and even-sized (friendlier for encoders).
+  const cw = Math.max(2, Math.min(Math.round(region.w * sx), srcVideo.videoWidth - cx)) & ~1;
+  const ch = Math.max(2, Math.min(Math.round(region.h * sy), srcVideo.videoHeight - cy)) & ~1;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = cw;
+  canvas.height = ch;
+  const cctx = canvas.getContext('2d', { alpha: false });
+
+  let raf = 0;
+  let stopped = false;
+  const draw = () => {
+    if (stopped) return;
+    cctx.drawImage(srcVideo, cx, cy, cw, ch, 0, 0, cw, ch);
+    raf = requestAnimationFrame(draw);
+  };
+  draw();
+
+  cropCtl = {
+    stop() {
+      stopped = true;
+      cancelAnimationFrame(raf);
+      try { srcVideo.pause(); srcVideo.srcObject = null; } catch (_) {}
+    },
+  };
+  return canvas.captureStream(fps);
+}
+
 async function startRecording() {
   if (!selectedSource || isRecording) return;
   recordBtn.disabled = true;
@@ -316,11 +447,13 @@ async function startRecording() {
   const kind = selectedSource.kind || 'screen';
   const fps = parseInt(fpsSelect.value, 10);
   const useMic = micEnabled.checked && !micEnabled.disabled;
+  // Region recording only applies to full-screen sources.
+  const region = kind !== 'window' ? selectedRegion : null;
 
   let recBaseEpoch;
   try {
     // Tell main to begin cursor tracking; it returns the time base.
-    ({ recBaseEpoch } = await window.api.startRecording({ display, kind }));
+    ({ recBaseEpoch } = await window.api.startRecording({ display, kind, region }));
 
     // Stop the live preview so we don't capture the screen twice at once
     // (that can drop frames in the actual recording).
@@ -328,7 +461,7 @@ async function startRecording() {
     previewPlaceholder.textContent = '● Recording in progress…';
 
     // Capture the screen via the desktop source id.
-    const videoStream = await navigator.mediaDevices.getUserMedia({
+    const fullStream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
         mandatory: {
@@ -339,9 +472,17 @@ async function startRecording() {
         },
       },
     });
-    streams.push(videoStream);
+    streams.push(fullStream);
 
-    const tracks = [...videoStream.getVideoTracks()];
+    // When a sub-region is selected, record a canvas cropped to it instead of
+    // the whole screen, so the saved file contains only the chosen area.
+    let captureStream = fullStream;
+    if (region) {
+      captureStream = await startRegionCrop(fullStream, display, region, fps);
+      streams.push(captureStream);
+    }
+
+    const tracks = [...captureStream.getVideoTracks()];
 
     let hasAudio = false;
     if (useMic) {
@@ -415,8 +556,7 @@ async function startRecording() {
     // Capture failed or was cancelled — clean up so nothing is left running.
     console.error('Failed to start recording:', err);
     try { await window.api.abortRecording(); } catch (_) {}
-    streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
-    streams = [];
+    teardownStreams();
     mediaRecorder = null;
     camRecorder = null;
     topStatus.textContent = 'Could not start recording: ' + (err.message || err);
@@ -435,16 +575,14 @@ async function onRecordingStopped() {
 
     await window.api.finishRecording({ hasAudio: recState.hasAudio });
 
-    streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
-    streams = [];
+    teardownStreams();
 
     topStatus.textContent = 'Opening editor…';
     await window.api.openEditor();
   } catch (err) {
     console.error('Failed to save recording:', err);
     try { await window.api.abortRecording(); } catch (_) {}
-    streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
-    streams = [];
+    teardownStreams();
     topStatus.textContent = 'Could not save recording: ' + (err.message || err);
     resetRecordingUI();
     if (selectedSource) startScreenPreview(selectedSource);

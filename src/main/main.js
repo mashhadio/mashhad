@@ -99,6 +99,9 @@ function createWindow() {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Keep timers/rAF running when the window is occluded so the region-crop
+      // draw loop doesn't freeze while the user interacts with the app behind it.
+      backgroundThrottling: false,
     },
   });
 
@@ -121,6 +124,67 @@ function loadHome() {
 function loadEditor() {
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'editor.html'));
 }
+
+// ---------------------------------------------------------------------------
+// IPC: drag-to-select recording area
+// ---------------------------------------------------------------------------
+// Opens a transparent overlay covering the given display and resolves with the
+// chosen rectangle { x, y, w, h } in DIP relative to that display's top-left, or
+// null if the user cancels.
+function selectRegion(display) {
+  return new Promise((resolve) => {
+    const b = display.bounds;
+    const overlay = new BrowserWindow({
+      x: b.x,
+      y: b.y,
+      width: b.width,
+      height: b.height,
+      frame: false,
+      transparent: true,
+      hasShadow: false,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      enableLargerThanScreen: true,
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload', 'region-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+
+    // Float above everything, including the macOS menu bar and full-screen apps.
+    overlay.setAlwaysOnTop(true, 'screen-saver');
+    if (isMac) overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreenWindows: true });
+    overlay.setBounds(b); // ensure it covers the exact display, menu bar included
+
+    let settled = false;
+    const finish = (rect) => {
+      if (settled) return;
+      settled = true;
+      ipcMain.removeListener('region:result', onResult);
+      try { if (!overlay.isDestroyed()) overlay.close(); } catch (_) {}
+      resolve(rect || null);
+    };
+    const onResult = (evt, rect) => {
+      if (evt.sender === overlay.webContents) finish(rect);
+    };
+    ipcMain.on('region:result', onResult);
+    overlay.on('closed', () => finish(null)); // covers Cmd+W / focus-loss closes
+
+    overlay.loadFile(path.join(__dirname, '..', 'renderer', 'region-overlay.html'));
+    overlay.focus();
+  });
+}
+
+ipcMain.handle('region:select', async (_evt, { display }) => {
+  if (!display || !display.bounds) return null;
+  return selectRegion(display);
+});
 
 // ---------------------------------------------------------------------------
 // IPC: screen-recording permission (macOS)
@@ -215,12 +279,13 @@ function endStream(stream) {
   });
 }
 
-ipcMain.handle('rec:start', async (_evt, { display, kind }) => {
+ipcMain.handle('rec:start', async (_evt, { display, kind, region }) => {
   const recBaseEpoch = Date.now();
-  // Cursor coordinates only map cleanly onto a full-screen capture.
+  // Cursor coordinates only map cleanly onto a full-screen (or cropped-region)
+  // capture. When a region is set, clicks are normalised relative to it.
   if (kind !== 'window') {
     ensureMacCursorPermission();
-    startCursorTracking(recBaseEpoch, display);
+    startCursorTracking(recBaseEpoch, display, region);
   } else {
     resetCursorTracking();
   }
@@ -238,6 +303,7 @@ ipcMain.handle('rec:start', async (_evt, { display, kind }) => {
     cursorPath: path.join(RECORDINGS_DIR, `rec-${stamp}.cursor.json`),
     camPath: videoPath.replace(/\.webm$/, '.cam.webm'),
     display,
+    region: region || null,
     recBaseEpoch,
     videoStream: fs.createWriteStream(videoPath),
     camStream: null,
@@ -272,6 +338,7 @@ ipcMain.handle('rec:finish', async (_evt, { hasAudio }) => {
     JSON.stringify({
       recBaseEpoch: s.recBaseEpoch,
       display: s.display,
+      region: s.region,
       hasAudio,
       hasCam,
       samples: cursorLog.samples,

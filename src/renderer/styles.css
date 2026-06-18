@@ -89,8 +89,38 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   border-radius: 8px;
 }
 
-.source-row { margin-bottom: 14px; }
+.source-row { margin-bottom: 14px; display: flex; gap: 12px; align-items: flex-end; }
 .source-row select { width: 100%; min-width: 0; }
+
+/* Recording-area picker */
+#areaField { flex: 0 0 auto; }
+.area-controls { display: flex; align-items: center; gap: 8px; }
+#selectAreaBtn { white-space: nowrap; }
+#selectAreaBtn:disabled { opacity: 0.45; cursor: default; }
+.region-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 6px 5px 11px;
+  border-radius: 999px;
+  background: rgba(77, 163, 255, 0.14);
+  border: 1px solid rgba(77, 163, 255, 0.45);
+  color: #cfe4ff; font-size: 12px; font-weight: 600;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.region-clear {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border: 0; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12); color: #cfe4ff;
+  font-size: 11px; line-height: 1; cursor: pointer;
+}
+.region-clear:hover { background: rgba(255, 255, 255, 0.24); }
+/* Outline of the chosen area, overlaid on the live preview */
+.region-outline {
+  position: absolute;
+  border: 2px solid #4da3ff;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  border-radius: 2px;
+}
 
 /* Large live preview of what will be recorded */
 .preview-stage {

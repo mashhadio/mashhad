@@ -9,7 +9,10 @@ contextBridge.exposeInMainWorld('api', {
   openScreenSettings: () => ipcRenderer.invoke('screen:openSettings'),
 
   // sources
-  listSources: () => ipcRenderer.invoke('sources:list'),
+  listSources: (opts) => ipcRenderer.invoke('sources:list', opts),
+
+  // drag-to-select recording area; resolves { x, y, w, h } in DIP or null
+  selectRegion: (payload) => ipcRenderer.invoke('region:select', payload),
 
   // recording (streamed to disk chunk-by-chunk)
   startRecording: (payload) => ipcRenderer.invoke('rec:start', payload),

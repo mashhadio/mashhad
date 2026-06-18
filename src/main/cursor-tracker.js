@@ -20,14 +20,26 @@ let clicks = [];
 let moveHandler = null;
 let downHandler = null;
 
-function setDisplay(display) {
-  // Electron bounds are in DIP; uiohook reports physical pixels.
-  const sf = display.scaleFactor || 1;
+function setDisplay(display, region) {
+  // Electron bounds are always in DIP (logical points). uiohook reports mouse
+  // coordinates in the OS global mouse space, whose units differ by platform:
+  //   - Windows / Linux: physical pixels  -> scale DIP up by the scale factor.
+  //   - macOS:           logical points   -> already matches DIP, do NOT scale.
+  // Scaling on macOS divides clicks by an extra `scaleFactor`, squashing every
+  // click into the top-left 1/sf of the frame (the offset bug on Retina).
+  const sf = process.platform === 'darwin' ? 1 : (display.scaleFactor || 1);
+  const b = display.bounds;
+  // When recording a sub-region, normalise clicks relative to it (its top-left
+  // is `bounds + region.offset`, in DIP) so 0..1 spans the cropped video.
+  const ox = region ? b.x + region.x : b.x;
+  const oy = region ? b.y + region.y : b.y;
+  const w = region ? region.w : b.width;
+  const h = region ? region.h : b.height;
   displayPhys = {
-    x: display.bounds.x * sf,
-    y: display.bounds.y * sf,
-    w: Math.max(1, display.bounds.width * sf),
-    h: Math.max(1, display.bounds.height * sf),
+    x: ox * sf,
+    y: oy * sf,
+    w: Math.max(1, w * sf),
+    h: Math.max(1, h * sf),
   };
 }
 
@@ -40,12 +52,12 @@ function norm(e) {
   };
 }
 
-function startCursorTracking(recBaseEpoch, display) {
+function startCursorTracking(recBaseEpoch, display, region) {
   if (!uIOhook) return;
   if (active) stopCursorTracking();
 
   recBase = recBaseEpoch;
-  if (display) setDisplay(display);
+  if (display) setDisplay(display, region);
   samples = [];
   clicks = [];
   active = true;

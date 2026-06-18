@@ -51,11 +51,22 @@
           <label for="sourceSelect">Source</label>
           <select id="sourceSelect"></select>
         </div>
+        <div class="field" id="areaField">
+          <label>Recording area</label>
+          <div class="area-controls">
+            <button class="btn-ghost" id="selectAreaBtn" disabled>⬚ Select area…</button>
+            <span class="region-chip" id="regionChip" style="display:none">
+              <span id="regionChipText"></span>
+              <button class="region-clear" id="regionClear" title="Record full screen instead">✕</button>
+            </span>
+          </div>
+        </div>
       </div>
 
       <div class="preview-stage" id="previewStage">
         <div class="preview-placeholder" id="previewPlaceholder">Select a source to preview what will be recorded</div>
         <video id="screenPreviewVideo" autoplay muted playsinline></video>
+        <div class="region-outline" id="regionOutline" style="display:none"></div>
         <canvas id="camPreview" class="cam-overlay" style="display:none"></canvas>
       </div>
 
