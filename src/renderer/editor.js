@@ -16,6 +16,8 @@ const playhead = document.getElementById('playhead');
 const autoZoomBtn = document.getElementById('autoZoomBtn');
 const addZoomBtn = document.getElementById('addZoomBtn');
 const clearZoomBtn = document.getElementById('clearZoomBtn');
+const splitBtn = document.getElementById('splitBtn');
+const undoBtn = document.getElementById('undoBtn');
 const zoomLevel = document.getElementById('zoomLevel');
 const zoomLevelVal = document.getElementById('zoomLevelVal');
 const zoomLevelLabel = document.getElementById('zoomLevelLabel');
@@ -58,6 +60,17 @@ let blocks = [];
 let selectedBlock = null;
 let defaultScale = 2.0;
 let duration = 0;
+
+// Non-linear timeline. `clips` is an ordered list of source-time ranges that
+// play back-to-back in EDIT order — so reordering, splitting and deleting clips
+// all just rewrite this array. The video element always holds SOURCE time; the
+// timeline/playhead work in "edited time" (cumulative clip lengths).
+let clips = [];
+let selectedClipId = null;
+let clipSeq = 0;            // id generator so selection survives reorders
+let clipHistory = [];       // snapshots of `clips` for undo
+let playIdx = 0;            // index of the clip currently at the playhead
+let playheadEdited = 0;     // playhead position in edited time (seconds)
 let rafId = null;
 let exporting = false;
 let camReady = false;
@@ -120,6 +133,10 @@ async function init() {
   });
 
   duration = await resolveDuration();
+  clips = [{ id: clipSeq++, start: 0, end: duration }];
+  clipHistory = [];
+  playIdx = 0;
+  playheadEdited = 0;
 
   canvas.width = video.videoWidth || 1920;
   canvas.height = video.videoHeight || 1080;
@@ -439,27 +456,65 @@ async function applyAudioPreview(profile) {
   audioStatus.textContent = '· cleaned ✓';
 }
 
+// Advance the source <video> to the start of the next clip in edit order.
+// Returns false when the playhead has run off the end of the timeline.
+function advanceToNextClip() {
+  if (playIdx >= clips.length - 1) return false;
+  playIdx++;
+  const nc = clips[playIdx];
+  if (camReady) camVideo.currentTime = Math.min(nc.start, camVideo.duration || nc.start);
+  if (cleanAudioActive) cleanAudio.currentTime = nc.start;
+  video.currentTime = nc.start;
+  lastFxTime = nc.start; // don't fire clicks across the seam
+  return true;
+}
+
+const SEAM = 0.03; // advance this many seconds before a clip's source end
+
 function renderLoop() {
+  // Keep going when the media element fires 'ended' mid-timeline (a reordered
+  // clip can hit the true source end); only bail on an intentional pause.
+  if (video.paused && !video.ended) return;
+  const c = clips[playIdx];
+  if (!c) { pause(); return; }
+
+  // Reached the end of the current clip -> move to the next in edit order.
+  if (video.ended || video.currentTime >= c.end - SEAM) {
+    const next = clips[playIdx + 1];
+    const contiguous = next && !video.ended && Math.abs(next.start - c.end) < 0.04;
+    if (contiguous) {
+      playIdx++; // a plain split: keep rolling through the seam without a seek
+    } else if (!advanceToNextClip()) {
+      pause();
+      playIdx = clips.length - 1;
+      seekEdited(editedDuration());
+      return;
+    } else if (video.paused) {
+      video.play().catch(() => {}); // resume if the seek followed an 'ended'
+    }
+    rafId = requestAnimationFrame(renderLoop);
+    return;
+  }
+
   drawAt(video.currentTime);
-  movePlayhead(video.currentTime);
+  playheadEdited = clamp(editedStartOf(playIdx) + (video.currentTime - c.start), 0, editedDuration());
+  movePlayhead(playheadEdited);
   updateTimeLabel();
   playClickSounds(video.currentTime);
-  // Keep the cleaned audio locked to the video.
-  if (cleanAudioActive && !video.paused && Math.abs(cleanAudio.currentTime - video.currentTime) > 0.18) {
+  if (cleanAudioActive && Math.abs(cleanAudio.currentTime - video.currentTime) > 0.18) {
     cleanAudio.currentTime = video.currentTime;
   }
-  if (!video.paused && !video.ended) {
-    rafId = requestAnimationFrame(renderLoop);
-  }
+  rafId = requestAnimationFrame(renderLoop);
 }
 
 // Fire the click sound for any click crossed since the last frame (preview).
+// Playback jumps around in source time across clips, so test an explicit window
+// rather than assuming monotonic time.
 function playClickSounds(t) {
   if (clickSound.checked) {
     const vol = parseInt(clickVol.value, 10) / 100;
     for (const tc of clickTimes) {
-      if (tc > t) break; // time-ordered; nothing further has happened yet
-      if (tc > lastFxTime) {
+      if (tc > lastFxTime && tc <= t) {
         const a = clickAudio.cloneNode();
         a.volume = vol;
         a.play().catch(() => {});
@@ -470,11 +525,7 @@ function playClickSounds(t) {
 }
 
 function play() {
-  if (video.ended) {
-    video.currentTime = 0;
-    if (camReady) camVideo.currentTime = 0;
-    if (cleanAudioActive) cleanAudio.currentTime = 0;
-  }
+  if (playheadEdited >= editedDuration() - 0.05) seekEdited(0); // restart from top
   lastFxTime = video.currentTime;
   updateAudioRouting();
   video.play();
@@ -491,60 +542,92 @@ function pause() {
   if (rafId) cancelAnimationFrame(rafId);
 }
 playBtn.addEventListener('click', () => (video.paused ? play() : pause()));
-video.addEventListener('ended', () => {
-  if (camReady) camVideo.pause();
-  cleanAudio.pause();
-  playBtn.textContent = '▶ Play';
-});
 
 function updateTimeLabel() {
-  timeLabel.textContent = `${fmt(video.currentTime)} / ${fmt(duration)}`;
+  timeLabel.textContent = `${fmt(playheadEdited)} / ${fmt(editedDuration())}`;
 }
 
 // ---------------------------------------------------------------------------
-// Timeline rendering
+// Timeline rendering (edited time: positions come from cumulative clip lengths)
 // ---------------------------------------------------------------------------
 function buildTimeline() {
-  [...timeline.querySelectorAll('.block, .click-tick')].forEach((n) => n.remove());
+  [...timeline.querySelectorAll('.block, .click-tick, .clip')].forEach((n) => n.remove());
   const w = timeline.clientWidth;
+  const total = editedDuration() || 1;
 
-  (project.cursor.clicks || []).forEach((c) => {
-    const tick = document.createElement('div');
-    tick.className = 'click-tick';
-    tick.style.left = `${(c.t / 1000 / duration) * w}px`;
-    timeline.appendChild(tick);
-  });
-
-  blocks.forEach((b, i) => {
+  // Clip track — the draggable, reorderable base layer.
+  clips.forEach((c, ci) => {
     const el = document.createElement('div');
-    el.className = 'block' + (b === selectedBlock ? ' selected' : '');
-    el.dataset.index = i;
-    layoutBlock(el, b, w);
-    el.title = `Zoom ${b.scale.toFixed(1)}× — drag to move, edges to resize, double-click to delete`;
-    el.innerHTML = `<div class="handle l"></div><span>${b.scale.toFixed(1)}×</span><div class="handle r"></div>`;
-    el.addEventListener('dblclick', (e) => {
+    el.className = 'clip' + (c.id === selectedClipId ? ' selected' : '');
+    el.dataset.cidx = ci;
+    el.style.left = `${(editedStartOf(ci) / total) * w}px`;
+    el.style.width = `${(clipLen(c) / total) * w}px`;
+    el.title = 'Drag to reorder · ✕ or Delete to remove';
+    el.innerHTML = `<span class="clip-label">${fmt(clipLen(c))}</span><button class="clip-delete" title="Delete clip" tabindex="-1">✕</button>`;
+    el.querySelector('.clip-delete').addEventListener('mousedown', (e) => e.stopPropagation());
+    el.querySelector('.clip-delete').addEventListener('click', (e) => {
       e.stopPropagation();
-      const idx = blocks.indexOf(b);
-      if (idx >= 0) blocks.splice(idx, 1);
-      if (selectedBlock === b) selectBlock(null);
-      buildTimeline();
-      drawAt(video.currentTime);
+      deleteClip(c.id);
     });
     timeline.appendChild(el);
   });
+
+  // Recorded clicks, mapped onto the edited timeline (dropped if cut out).
+  (project.cursor.clicks || []).forEach((c) => {
+    const te = sourceToEdited(c.t / 1000);
+    if (te == null) return;
+    const tick = document.createElement('div');
+    tick.className = 'click-tick';
+    tick.style.left = `${(te / total) * w}px`;
+    timeline.appendChild(tick);
+  });
+
+  // Zoom blocks live in source time; draw one rect per clip they overlap so they
+  // stay visually attached to their footage no matter how clips are reordered.
+  blocks.forEach((b, bi) => {
+    clips.forEach((c, ci) => {
+      const s = Math.max(b.start, c.start);
+      const e = Math.min(b.end, c.end);
+      if (e <= s + 1e-3) return;
+      const es = editedStartOf(ci) + (s - c.start);
+      const ee = editedStartOf(ci) + (e - c.start);
+      const el = document.createElement('div');
+      el.className = 'block' + (b === selectedBlock ? ' selected' : '');
+      el.dataset.block = bi;
+      el.dataset.clip = ci;
+      el.style.left = `${(es / total) * w}px`;
+      el.style.width = `${Math.max(10, ((ee - es) / total) * w)}px`;
+      el.title = `Zoom ${b.scale.toFixed(1)}× — drag to move, edges to resize, ✕ or Backspace to delete`;
+      el.innerHTML = `<div class="handle l"></div><span>${b.scale.toFixed(1)}×</span><button class="block-delete" title="Delete zoom" tabindex="-1">✕</button><div class="handle r"></div>`;
+      el.addEventListener('dblclick', (ev) => { ev.stopPropagation(); deleteBlock(b); });
+      el.querySelector('.block-delete').addEventListener('mousedown', (ev) => ev.stopPropagation());
+      el.querySelector('.block-delete').addEventListener('click', (ev) => { ev.stopPropagation(); deleteBlock(b); });
+      timeline.appendChild(el);
+    });
+  });
 }
 
-function layoutBlock(el, b, w) {
-  el.style.left = `${(b.start / duration) * w}px`;
-  el.style.width = `${Math.max(10, ((b.end - b.start) / duration) * w)}px`;
+function movePlayhead(te) {
+  playhead.style.left = `${(te / (editedDuration() || 1)) * timeline.clientWidth}px`;
 }
 
-function movePlayhead(t) {
-  playhead.style.left = `${(t / duration) * timeline.clientWidth}px`;
+// Seek by EDITED time: resolve to the source frame inside the active clip.
+function seekEdited(te) {
+  te = clamp(te, 0, Math.max(0, editedDuration() - 0.001));
+  const m = editedToSource(te);
+  playIdx = m.idx;
+  playheadEdited = te;
+  if (camReady) camVideo.currentTime = Math.min(m.src, camVideo.duration || m.src);
+  if (cleanAudioActive) cleanAudio.currentTime = Math.min(m.src, cleanAudio.duration || m.src);
+  video.currentTime = m.src;
+  lastFxTime = m.src;
+  drawAt(m.src);
+  movePlayhead(te);
+  updateTimeLabel();
 }
 
 // ---------------------------------------------------------------------------
-// Block selection + drag/resize
+// Block selection + drag/resize · clip reorder drag
 // ---------------------------------------------------------------------------
 function selectBlock(b) {
   selectedBlock = b;
@@ -558,71 +641,145 @@ function selectBlock(b) {
     zoomLevelLabel.innerHTML = `New zoom level: <b id="zoomLevelVal">${defaultScale.toFixed(1)}×</b>`;
   }
   [...timeline.querySelectorAll('.block')].forEach((el) => {
-    el.classList.toggle('selected', blocks[+el.dataset.index] === selectedBlock);
+    el.classList.toggle('selected', blocks[+el.dataset.block] === selectedBlock);
   });
 }
 
-let drag = null;
+let drag = null;       // zoom move/resize
+let clipDrag = null;   // clip reorder
 
 timeline.addEventListener('mousedown', (e) => {
   const blockEl = e.target.closest('.block');
   if (blockEl) {
-    const b = blocks[+blockEl.dataset.index];
+    const b = blocks[+blockEl.dataset.block];
+    const c = clips[+blockEl.dataset.clip];
     selectBlock(b);
     let mode = 'move';
     if (e.target.classList.contains('l')) mode = 'l';
     else if (e.target.classList.contains('r')) mode = 'r';
-    drag = {
-      mode,
-      block: b,
-      el: blockEl,
-      startX: e.clientX,
-      origStart: b.start,
-      origEnd: b.end,
-      moved: false,
-    };
+    drag = { mode, block: b, clip: c, el: blockEl, startX: e.clientX, origStart: b.start, origEnd: b.end, moved: false };
     e.preventDefault();
     return;
   }
-  // empty timeline -> seek + deselect
-  selectBlock(null);
+
+  const clipEl = e.target.closest('.clip');
   const rect = timeline.getBoundingClientRect();
-  const f = (e.clientX - rect.left) / rect.width;
-  seekAndDraw(clamp(f * duration, 0, duration));
+  if (clipEl) {
+    const ci = +clipEl.dataset.cidx;
+    selectBlock(null);
+    selectedClipId = clips[ci].id;
+    // Toggle selection in place (don't rebuild — it would invalidate clipEl).
+    [...timeline.querySelectorAll('.clip')].forEach((el) => el.classList.toggle('selected', +el.dataset.cidx === ci));
+    clipDrag = { idx: ci, el: clipEl, startX: e.clientX, moved: false, slot: ci };
+    seekEdited(((e.clientX - rect.left) / rect.width) * editedDuration());
+    e.preventDefault();
+    return;
+  }
+
+  // Bare timeline (gaps) -> seek.
+  selectBlock(null);
+  seekEdited(((e.clientX - rect.left) / rect.width) * editedDuration());
 });
 
 window.addEventListener('mousemove', (e) => {
-  if (!drag) return;
-  const dx = e.clientX - drag.startX;
-  if (Math.abs(dx) > 2) drag.moved = true;
-  const dt = (dx / timeline.clientWidth) * duration;
-  const b = drag.block;
-  const minLen = 0.3;
-  if (drag.mode === 'move') {
-    const len = drag.origEnd - drag.origStart;
-    let ns = clamp(drag.origStart + dt, 0, duration - len);
-    b.start = ns;
-    b.end = ns + len;
-  } else if (drag.mode === 'l') {
-    b.start = clamp(drag.origStart + dt, 0, b.end - minLen);
-  } else if (drag.mode === 'r') {
-    b.end = clamp(drag.origEnd + dt, b.start + minLen, duration);
+  if (drag) {
+    const w = timeline.clientWidth;
+    const total = editedDuration() || 1;
+    const dx = e.clientX - drag.startX;
+    if (Math.abs(dx) > 2) drag.moved = true;
+    // Within a clip, edited and source time advance 1:1, so a pixel delta maps
+    // to the same number of seconds in either space.
+    const dt = (dx / w) * total;
+    const b = drag.block;
+    const c = drag.clip;
+    const minLen = 0.3;
+    if (drag.mode === 'move') {
+      const len = drag.origEnd - drag.origStart;
+      const ns = clamp(drag.origStart + dt, c.start, c.end - len);
+      b.start = ns;
+      b.end = ns + len;
+    } else if (drag.mode === 'l') {
+      b.start = clamp(drag.origStart + dt, c.start, b.end - minLen);
+    } else if (drag.mode === 'r') {
+      b.end = clamp(drag.origEnd + dt, b.start + minLen, c.end);
+    }
+    const ci = clips.indexOf(c);
+    const es = editedStartOf(ci) + (b.start - c.start);
+    const ee = editedStartOf(ci) + (b.end - c.start);
+    drag.el.style.left = `${(es / total) * w}px`;
+    drag.el.style.width = `${Math.max(10, ((ee - es) / total) * w)}px`;
+    drag.el.querySelector('span').textContent = `${b.scale.toFixed(1)}×`;
+    drawAt(video.currentTime);
+    return;
   }
-  layoutBlock(drag.el, b, timeline.clientWidth);
-  drag.el.querySelector('span').textContent = `${b.scale.toFixed(1)}×`;
-  drawAt(video.currentTime);
+
+  if (clipDrag) {
+    const dx = e.clientX - clipDrag.startX;
+    if (Math.abs(dx) > 3) clipDrag.moved = true;
+    clipDrag.el.style.transform = `translateX(${dx}px)`;
+    clipDrag.el.classList.add('dragging');
+    const rect = timeline.getBoundingClientRect();
+    clipDrag.slot = computeInsertIndex(e.clientX - rect.left);
+    showInsertMarker(clipDrag.slot);
+  }
 });
 
-window.addEventListener('mouseup', () => { drag = null; });
+window.addEventListener('mouseup', () => {
+  if (drag) {
+    const moved = drag.moved;
+    drag = null;
+    if (moved) buildTimeline(); // reconcile rects that may now span clips
+    return;
+  }
+  if (clipDrag) {
+    const cd = clipDrag;
+    clipDrag = null;
+    cd.el.style.transform = '';
+    cd.el.classList.remove('dragging');
+    hideInsertMarker();
+    if (cd.moved) moveClip(cd.idx, cd.slot);
+    else buildTimeline();
+  }
+});
 
-function seekAndDraw(t) {
-  if (camReady) camVideo.currentTime = Math.min(t, camVideo.duration || t);
-  if (cleanAudioActive) cleanAudio.currentTime = Math.min(t, cleanAudio.duration || t);
-  video.currentTime = t;
-  lastFxTime = t;
-  drawAt(t);
-  movePlayhead(t);
-  updateTimeLabel();
+// Insertion slot (0..clips.length) nearest pointer x, by clip midpoints.
+function computeInsertIndex(x) {
+  const w = timeline.clientWidth;
+  const total = editedDuration() || 1;
+  let acc = 0;
+  let slot = 0;
+  for (let i = 0; i < clips.length; i++) {
+    const len = clipLen(clips[i]);
+    const mid = ((acc + len / 2) / total) * w;
+    if (x > mid) slot = i + 1;
+    acc += len;
+  }
+  return slot;
+}
+
+function ensureInsertEl() {
+  let el = timeline.querySelector('.clip-insert');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'clip-insert';
+    timeline.appendChild(el);
+  }
+  return el;
+}
+
+function showInsertMarker(slot) {
+  const w = timeline.clientWidth;
+  const total = editedDuration() || 1;
+  let acc = 0;
+  for (let i = 0; i < slot; i++) acc += clipLen(clips[i]);
+  const el = ensureInsertEl();
+  el.style.left = `${(acc / total) * w}px`;
+  el.style.display = 'block';
+}
+
+function hideInsertMarker() {
+  const el = timeline.querySelector('.clip-insert');
+  if (el) el.style.display = 'none';
 }
 
 // ---------------------------------------------------------------------------
@@ -653,9 +810,165 @@ function clearZoom() {
   drawAt(video.currentTime);
 }
 
+function deleteBlock(b) {
+  const idx = blocks.indexOf(b);
+  if (idx < 0) return;
+  blocks.splice(idx, 1);
+  if (selectedBlock === b) selectBlock(null);
+  buildTimeline();
+  drawAt(video.currentTime);
+}
+
+// ---------------------------------------------------------------------------
+// Clip model (non-linear edited timeline)
+// ---------------------------------------------------------------------------
+function clipLen(c) { return c.end - c.start; }
+function editedDuration() { return clips.reduce((a, c) => a + clipLen(c), 0); }
+
+// Edited start (seconds) of the clip at index `idx`.
+function editedStartOf(idx) {
+  let s = 0;
+  for (let i = 0; i < idx; i++) s += clipLen(clips[i]);
+  return s;
+}
+
+// Has the user changed anything from the original single full-length clip?
+function isEdited() {
+  return clips.length > 1 || !clips.length ||
+    clips[0].start > 0.01 || clips[0].end < duration - 0.05;
+}
+
+// edited time -> { idx, clip, src }  (source time inside the active clip)
+function editedToSource(te) {
+  if (!clips.length) return { idx: 0, clip: { start: 0, end: 0 }, src: 0 };
+  te = clamp(te, 0, editedDuration());
+  let acc = 0;
+  for (let i = 0; i < clips.length; i++) {
+    const len = clipLen(clips[i]);
+    if (te < acc + len || i === clips.length - 1) {
+      return { idx: i, clip: clips[i], src: clips[i].start + (te - acc) };
+    }
+    acc += len;
+  }
+  return { idx: 0, clip: clips[0], src: clips[0].start };
+}
+
+// source time -> edited time, or null if that moment was cut out.
+function sourceToEdited(ts) {
+  let acc = 0;
+  for (const c of clips) {
+    if (ts >= c.start && ts < c.end) return acc + (ts - c.start);
+    acc += clipLen(c);
+  }
+  return null;
+}
+
+function clipIdxForSource(ts) {
+  for (let i = 0; i < clips.length; i++) if (ts >= clips[i].start && ts < clips[i].end) return i;
+  return 0;
+}
+
+function selectedClip() { return clips.find((c) => c.id === selectedClipId) || null; }
+
+function selectClip(id) {
+  selectedClipId = id;
+  buildTimeline();
+}
+
+// Snapshot for undo, taken before every mutating edit.
+function pushHistory() {
+  clipHistory.push(clips.map((c) => ({ ...c })));
+  if (clipHistory.length > 100) clipHistory.shift();
+  updateUndoBtn();
+}
+
+function updateUndoBtn() {
+  undoBtn.disabled = clipHistory.length === 0;
+}
+
+function undo() {
+  if (!clipHistory.length) return;
+  clips = clipHistory.pop();
+  if (!clips.some((c) => c.id === selectedClipId)) selectedClipId = null;
+  updateUndoBtn();
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
+function splitAtPlayhead() {
+  const m = editedToSource(playheadEdited);
+  const c = m.clip;
+  const t = m.src;
+  // Don't split on a boundary or at the very edges of a clip.
+  if (t <= c.start + 0.05 || t >= c.end - 0.05) return;
+  pushHistory();
+  const idx = clips.indexOf(c);
+  const right = { id: clipSeq++, start: t, end: c.end };
+  c.end = t;
+  clips.splice(idx + 1, 0, right);
+  selectClip(right.id); // redraws the timeline
+}
+
+function deleteClip(id) {
+  const c = clips.find((x) => x.id === id);
+  if (!c) return;
+  if (clips.length <= 1) {
+    topStatus.textContent = "Can't delete the last remaining clip.";
+    return;
+  }
+  pushHistory();
+  clips = clips.filter((x) => x.id !== id);
+  if (selectedClipId === id) selectedClipId = null;
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
+// Move the clip at index `from` so it sits at insertion slot `to` (0..length).
+function moveClip(from, to) {
+  if (to > from) to--; // removing `from` first shifts later indices left
+  to = clamp(to, 0, clips.length - 1);
+  if (to === from) { buildTimeline(); return; }
+  pushHistory();
+  const [c] = clips.splice(from, 1);
+  clips.splice(to, 0, c);
+  selectClip(c.id);
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
 autoZoomBtn.addEventListener('click', autoZoom);
 addZoomBtn.addEventListener('click', addZoomHere);
 clearZoomBtn.addEventListener('click', clearZoom);
+splitBtn.addEventListener('click', splitAtPlayhead);
+undoBtn.addEventListener('click', undo);
+
+// Keyboard: Delete/Backspace removes the selected zoom (preferred) or clip;
+// 'S' splits at the playhead; Ctrl/Cmd+Z undoes the last clip edit.
+window.addEventListener('keydown', (e) => {
+  const el = document.activeElement;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+    e.preventDefault();
+    undo();
+    return;
+  }
+
+  if (e.key === 'Backspace' || e.key === 'Delete') {
+    if (selectedBlock) {
+      e.preventDefault();
+      deleteBlock(selectedBlock);
+    } else if (selectedClipId != null) {
+      e.preventDefault();
+      deleteClip(selectedClipId);
+    }
+    return;
+  }
+
+  if (e.key === 's' || e.key === 'S') {
+    e.preventDefault();
+    splitAtPlayhead();
+  }
+});
 
 zoomLevel.addEventListener('input', () => {
   const v = parseFloat(zoomLevel.value);
@@ -752,6 +1065,9 @@ testFxBtn.addEventListener('click', () => {
 
   pause();
   seekTo(start).then(() => {
+    playIdx = clipIdxForSource(start);
+    const te = sourceToEdited(start);
+    if (te != null) playheadEdited = te;
     lastFxTime = start;
     play();
     const watch = () => {
@@ -760,8 +1076,11 @@ testFxBtn.addEventListener('click', () => {
         pause();
         // Park just after the click so the ripple stays frozen on screen.
         seekTo(tc + 0.12).then(() => {
+          playIdx = clipIdxForSource(tc + 0.12);
+          const pe = sourceToEdited(tc + 0.12);
+          if (pe != null) playheadEdited = pe;
           drawAt(video.currentTime);
-          movePlayhead(video.currentTime);
+          movePlayhead(playheadEdited);
           updateTimeLabel();
         });
       } else {
@@ -782,8 +1101,9 @@ clickSoundName.addEventListener('change', () => {
 });
 
 window.addEventListener('resize', () => {
+  if (drag || clipDrag) return; // don't detach the element being dragged
   buildTimeline();
-  movePlayhead(video.currentTime);
+  movePlayhead(playheadEdited);
 });
 
 // ---------------------------------------------------------------------------
@@ -810,6 +1130,9 @@ async function runExport() {
 
   const off = window.api.onExportProgress((line) => { exportStatus.textContent = line; });
 
+  // Click sounds must land on the edited timeline; drop any that were cut out.
+  const editedClicks = clickTimes.map(sourceToEdited).filter((t) => t != null);
+
   try {
     const res = await window.api.runExport({
       zoomedBuffer,
@@ -817,10 +1140,12 @@ async function runExport() {
         audioEnabled: project.hasAudio && noiseProfile.value !== 'off',
         noiseProfile: noiseProfile.value,
         clickSound: clickSound.checked,
-        clickTimes: clickSound.checked ? clickTimes : [],
+        clickTimes: clickSound.checked ? editedClicks : [],
         clickSoundName: clickSoundName.value,
         clickVolume: parseInt(clickVol.value, 10) / 100,
-        durationSec: duration,
+        durationSec: editedDuration(),
+        // Source ranges in edit order; FFmpeg cuts + reorders the mic to match.
+        clips: isEdited() ? clips.map((c) => ({ start: c.start, end: c.end })) : null,
         format: exportFormat.value,
         quality: exportQuality.value,
         resolution: exportResolution.value,
@@ -869,45 +1194,107 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
     const FRAME_MS = 1000 / 60; // cap capture to 60fps regardless of monitor Hz
     let lastFrame = -1;
 
-    const begin = () => {
-      // Draw and capture the first frame BEFORE starting, so the opening
-      // keyframe has real content rather than an empty (green) buffer.
-      drawAt(0);
-      rec.start();
-      pushFrame();
-      video.play();
-      if (camReady) camVideo.play().catch(() => {});
-      const step = (now) => {
-        if (finished) return;
-        // Throttle to ~60fps so a 144Hz display doesn't produce a 144fps file.
-        if (lastFrame < 0 || now - lastFrame >= FRAME_MS - 1) {
-          lastFrame = now;
-          drawAt(video.currentTime);
-          pushFrame();
-          if (onProgress && duration) onProgress(Math.min(1, video.currentTime / duration));
-        }
-        if (video.ended || (duration && video.currentTime >= duration - 0.02)) {
+    // Capture the clips in edit order. Between clips we seek the source video to
+    // the next clip's start — which can be backwards when clips were reordered.
+    const seq = clips;
+    const total = editedDuration() || duration;
+    const startAt = seq.length ? seq[0].start : 0;
+    let segIdx = 0;
+    let elapsedBefore = 0;
+    let skipping = false;
+
+    let step;
+    step = (now) => {
+      if (finished) return;
+      if (skipping) return; // waiting on a 'seeked'; onSeeked re-arms the loop
+
+      // Reached the end of the current clip.
+      if (video.ended || video.currentTime >= seq[segIdx].end - 0.02) {
+        elapsedBefore += seq[segIdx].end - seq[segIdx].start;
+        segIdx++;
+        if (segIdx >= seq.length) {
           finished = true;
           video.pause();
           if (camReady) camVideo.pause();
           setTimeout(() => rec.stop(), 200);
-        } else {
-          requestAnimationFrame(step);
+          return;
         }
-      };
+        const target = seq[segIdx].start;
+        if (camReady) camVideo.currentTime = Math.min(target, camVideo.duration || target);
+        // Contiguous clips (a plain split): we're already there, keep rolling
+        // without a seek — seeking to the same spot never fires 'seeked'.
+        if (!video.ended && Math.abs(video.currentTime - target) < 0.04) {
+          lastFrame = -1;
+          requestAnimationFrame(step);
+          return;
+        }
+        // Otherwise jump to the next clip and wait for the seek to land.
+        skipping = true;
+        // Freeze the recorder timeline during the seek. MediaRecorder runs on
+        // wall-clock, so without this the last frame would be held for the seek
+        // latency — bloating the video past the (precisely-cut) audio and
+        // leaving a freeze-frame at every cut.
+        if (rec.state === 'recording') rec.pause();
+        let settled = false;
+        const onSeeked = () => {
+          if (settled) return;
+          settled = true;
+          video.removeEventListener('seeked', onSeeked);
+          skipping = false;
+          lastFrame = -1;
+          // If we just seeked away from the true media end, the element paused
+          // on 'ended' — resume so the next clip actually plays out.
+          if (video.paused) video.play().catch(() => {});
+          if (rec.state === 'paused') rec.resume();
+          requestAnimationFrame(step);
+        };
+        video.addEventListener('seeked', onSeeked);
+        video.currentTime = target;
+        setTimeout(onSeeked, 1500); // safety if 'seeked' is missed
+        return;
+      }
+
+      // Throttle to ~60fps so a 144Hz display doesn't produce a 144fps file.
+      if (lastFrame < 0 || now - lastFrame >= FRAME_MS - 1) {
+        lastFrame = now;
+        drawAt(video.currentTime);
+        pushFrame();
+        if (onProgress && total) {
+          const done = elapsedBefore + (video.currentTime - seq[segIdx].start);
+          onProgress(Math.min(1, done / total));
+        }
+      }
+      requestAnimationFrame(step);
+    };
+
+    const begin = () => {
+      // Draw and capture the first frame BEFORE starting, so the opening
+      // keyframe has real content rather than an empty (green) buffer.
+      drawAt(video.currentTime);
+      rec.start();
+      pushFrame();
+      video.play();
+      if (camReady) camVideo.play().catch(() => {});
       requestAnimationFrame(step);
     };
 
     video.pause();
     video.muted = true;
-    if (camReady) camVideo.currentTime = 0;
-    // Seek to 0; if we're already there, start immediately (no 'seeked' fires).
-    if (video.currentTime < 0.05) {
+    if (camReady) camVideo.currentTime = startAt;
+    // Seek to the first clip; if we're already there, start immediately.
+    if (Math.abs(video.currentTime - startAt) < 0.05) {
       begin();
     } else {
-      const onSeeked = () => { video.removeEventListener('seeked', onSeeked); begin(); };
+      let settled = false;
+      const onSeeked = () => {
+        if (settled) return;
+        settled = true;
+        video.removeEventListener('seeked', onSeeked);
+        begin();
+      };
       video.addEventListener('seeked', onSeeked);
-      video.currentTime = 0;
+      video.currentTime = startAt;
+      setTimeout(onSeeked, 1500);
     }
   });
 }

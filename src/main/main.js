@@ -494,6 +494,7 @@ ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
       clickSoundName: options.clickSoundName || 'mouse',
       clickVolume: options.clickVolume != null ? options.clickVolume : 0.7,
       durationSec: options.durationSec || 0,
+      clips: options.clips || null,
       format,
       quality: options.quality || 'balanced',
       resolution: options.resolution || 'original',

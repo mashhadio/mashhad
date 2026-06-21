@@ -153,6 +153,7 @@ async function exportVideo({
   clickSoundName = 'mouse',
   clickVolume = 0.7,
   durationSec = 0,
+  clips = null,
   format = 'mp4',
   quality = 'balanced',
   resolution = 'original',
@@ -198,6 +199,11 @@ async function exportVideo({
   const args = ['-y'];
   const clicks = clickSound && clickTimes.length ? clickTimes.slice(0, MAX_CLICKS) : [];
   const useClicks = clicks.length > 0;
+  // The video is already cut + reordered by the renderer; here we rebuild the
+  // mic track from the same clips, in the same edit order, so it stays in sync.
+  const cutSegs = Array.isArray(clips) && clips.length ? clips : null;
+  const needAudioCut = !!(cutSegs && hasAudio);
+  const useComplex = useClicks || needAudioCut;
 
   // Input 0: rendered video. Input 1 (optional): original recording for audio.
   // Input 2 (optional): the click sfx.
@@ -205,37 +211,72 @@ async function exportVideo({
   if (hasAudio) args.push('-i', originalPath);
   if (useClicks) args.push('-i', clickSfxFile(clickSoundName));
 
-  if (useClicks) {
-    // One filtergraph covering both video (scaling) and audio (voice + clicks).
+  if (useComplex) {
+    // One filtergraph covering video (scaling) and audio (cut + voice + clicks).
     const parts = [];
     parts.push(`[0:v]${vf || 'null'}[vout]`);
 
-    const clickIdx = hasAudio ? 2 : 1;
-    const mixIns = [];
-    const dur = durationSec > 0 ? durationSec.toFixed(3) : 3600;
-    parts.push(`anullsrc=r=48000:cl=mono:d=${dur}[base]`);
-    mixIns.push('[base]');
-
+    // Build the cleaned voice track. When the timeline was edited, rebuild the
+    // mic from the clips (atrim each source range + concat in edit order) before
+    // the noise chain, so removed parts vanish and reordered parts follow.
+    let voiceLabel = null;
     if (hasAudio) {
+      let src = '[1:a]';
+      if (needAudioCut) {
+        const n = cutSegs.length;
+        // A filter input pad can only be consumed once, so fan the mic out into
+        // one copy per clip before trimming (mirrors the click asplit below).
+        const ins = [];
+        if (n === 1) {
+          ins.push('[1:a]');
+        } else {
+          const splitOuts = cutSegs.map((_, i) => `[m${i}]`).join('');
+          parts.push(`[1:a]asplit=${n}${splitOuts}`);
+          for (let i = 0; i < n; i++) ins.push(`[m${i}]`);
+        }
+        const labels = [];
+        cutSegs.forEach((s, i) => {
+          parts.push(`${ins[i]}atrim=start=${(+s.start).toFixed(3)}:end=${(+s.end).toFixed(3)},asetpts=PTS-STARTPTS[vc${i}]`);
+          labels.push(`[vc${i}]`);
+        });
+        parts.push(`${labels.join('')}concat=n=${n}:v=0:a=1[vcut]`);
+        src = '[vcut]';
+      }
       const chain = chains()[noiseProfile];
       const voiceChain = chain ? chain : 'aformat=sample_rates=48000:channel_layouts=mono';
-      parts.push(`[1:a]${voiceChain}[voice]`);
-      mixIns.push('[voice]');
+      parts.push(`${src}${voiceChain}[voice]`);
+      voiceLabel = '[voice]';
     }
 
-    const splitOuts = clicks.map((_, i) => `[c${i}]`).join('');
-    parts.push(`[${clickIdx}:a]asplit=${clicks.length}${splitOuts}`);
-    clicks.forEach((tc, i) => {
-      const ms = Math.max(0, Math.round(tc * 1000));
-      const vol = Math.max(0, Math.min(2, clickVolume)).toFixed(2);
-      parts.push(`[c${i}]adelay=${ms}|${ms},volume=${vol}[cd${i}]`);
-      mixIns.push(`[cd${i}]`);
-    });
-    parts.push(`${mixIns.join('')}amix=inputs=${mixIns.length}:normalize=0:dropout_transition=0[aout]`);
+    if (useClicks) {
+      const clickIdx = hasAudio ? 2 : 1;
+      const mixIns = [];
+      const dur = durationSec > 0 ? durationSec.toFixed(3) : 3600;
+      parts.push(`anullsrc=r=48000:cl=mono:d=${dur}[base]`);
+      mixIns.push('[base]');
+      if (voiceLabel) mixIns.push(voiceLabel);
 
-    args.push('-filter_complex', parts.join(';'));
-    args.push('-map', '[vout]', '-map', '[aout]');
-    args.push(...vEnc, ...aEnc);
+      const splitOuts = clicks.map((_, i) => `[c${i}]`).join('');
+      parts.push(`[${clickIdx}:a]asplit=${clicks.length}${splitOuts}`);
+      clicks.forEach((tc, i) => {
+        const ms = Math.max(0, Math.round(tc * 1000));
+        const vol = Math.max(0, Math.min(2, clickVolume)).toFixed(2);
+        parts.push(`[c${i}]adelay=${ms}|${ms},volume=${vol}[cd${i}]`);
+        mixIns.push(`[cd${i}]`);
+      });
+      parts.push(`${mixIns.join('')}amix=inputs=${mixIns.length}:normalize=0:dropout_transition=0[aout]`);
+
+      args.push('-filter_complex', parts.join(';'));
+      args.push('-map', '[vout]', '-map', '[aout]');
+      args.push(...vEnc, ...aEnc);
+    } else {
+      // Trimmed video + cleaned (cut) voice, no click mixing.
+      args.push('-filter_complex', parts.join(';'));
+      args.push('-map', '[vout]');
+      args.push(...vEnc);
+      if (voiceLabel) args.push('-map', voiceLabel, ...aEnc);
+      else args.push('-an');
+    }
   } else {
     args.push('-map', '0:v:0');
     if (vf) args.push('-vf', vf);

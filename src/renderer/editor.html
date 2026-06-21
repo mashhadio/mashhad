@@ -38,6 +38,11 @@
         </div>
         <div class="sep"></div>
         <div class="group">
+          <button id="splitBtn" title="Split the clip at the playhead (S)">✂ Split</button>
+          <button id="undoBtn" disabled title="Undo last clip edit (Ctrl+Z)">↩ Undo</button>
+        </div>
+        <div class="sep"></div>
+        <div class="group">
           <div class="slider">
             <span id="zoomLevelLabel">Zoom level: <b id="zoomLevelVal">2.0×</b></span>
             <input type="range" id="zoomLevel" min="1.2" max="4" step="0.1" value="2.0" />
@@ -132,6 +137,8 @@
       <p class="hint" id="zoomHint">
         Tip: click a zoom block on the timeline to select it, drag its middle to move it, drag its
         edges to resize, and use <b>Zoom level</b> to change just that block. Double-click a block to delete it.
+        Use <b>✂ Split</b> (or press <b>S</b>) to cut at the playhead, <b>drag clips</b> to reorder them, and
+        select a clip then press <b>Delete</b> (✕) to remove it. <b>Ctrl+Z</b> undoes clip edits.
       </p>
 
       <div class="editor-controls">
