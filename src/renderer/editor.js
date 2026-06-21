@@ -18,6 +18,7 @@ const addZoomBtn = document.getElementById('addZoomBtn');
 const clearZoomBtn = document.getElementById('clearZoomBtn');
 const splitBtn = document.getElementById('splitBtn');
 const undoBtn = document.getElementById('undoBtn');
+const clipTransition = document.getElementById('clipTransition');
 const zoomLevel = document.getElementById('zoomLevel');
 const zoomLevelVal = document.getElementById('zoomLevelVal');
 const zoomLevelLabel = document.getElementById('zoomLevelLabel');
@@ -71,6 +72,17 @@ let clipSeq = 0;            // id generator so selection survives reorders
 let clipHistory = [];       // snapshots of `clips` for undo
 let playIdx = 0;            // index of the clip currently at the playhead
 let playheadEdited = 0;     // playhead position in edited time (seconds)
+let drawClipIdx = 0;        // clip index the current frame belongs to
+
+// Clip transitions. Each clip can carry an intro `transition` ({type,duration})
+// describing how it enters from the previous clip — so it follows the clip on
+// reorder. We render it without a second decoder: when playback leaves a clip we
+// snapshot its last frame to an offscreen canvas, then composite that frozen
+// "outgoing" frame over the incoming clip's first `duration` seconds.
+const DEFAULT_TRANSITION_DUR = 0.5;
+const transCanvas = document.createElement('canvas');
+const transCtx = transCanvas.getContext('2d', { alpha: false });
+let transSnapIdx = -1;      // incoming clip index the snapshot is the outgoing frame for
 let rafId = null;
 let exporting = false;
 let camReady = false;
@@ -140,6 +152,8 @@ async function init() {
 
   canvas.width = video.videoWidth || 1920;
   canvas.height = video.videoHeight || 1080;
+  transCanvas.width = canvas.width;
+  transCanvas.height = canvas.height;
 
   if (project.hasCam && project.camUrl) {
     await setupCam(project.camUrl);
@@ -283,6 +297,78 @@ function drawAt(t) {
   engine.drawFrame(ctx, video, video.videoWidth, video.videoHeight, canvas.width, canvas.height, t);
   drawClickFx(t);
   drawCam();
+  drawTransition(t);
+}
+
+// Snapshot the canvas (the outgoing clip's last frame) so it can be composited
+// over the incoming clip during its transition. Sets transSnapIdx to the
+// incoming clip's index, or -1 when that clip has no transition.
+function snapshotOutgoing(incomingIdx) {
+  const c = clips[incomingIdx];
+  if (!c || incomingIdx === 0 || !c.transition || c.transition.type === 'none') {
+    transSnapIdx = -1;
+    return;
+  }
+  transCtx.drawImage(canvas, 0, 0, transCanvas.width, transCanvas.height);
+  transSnapIdx = incomingIdx;
+}
+
+// Composite the active clip's intro transition (if we're inside its window).
+function drawTransition(t) {
+  const idx = drawClipIdx;
+  if (idx !== transSnapIdx) return;
+  const c = clips[idx];
+  if (!c || !c.transition || c.transition.type === 'none') return;
+  // Never run longer than the incoming clip, so it can't get cut off mid-effect.
+  const dur = Math.min(c.transition.duration || DEFAULT_TRANSITION_DUR, clipLen(c) * 0.9);
+  const elapsed = t - c.start;
+  if (elapsed < 0 || elapsed >= dur) return;
+  applyTransition(c.transition.type, elapsed / dur);
+}
+
+// `img` (transCanvas) holds the frozen outgoing frame; ctx already holds the
+// live incoming frame. We draw the outgoing over it, dissolving per `p` (0..1).
+function applyTransition(type, p) {
+  const W = canvas.width, H = canvas.height;
+  const img = transCanvas;
+  const sm = p * p * (3 - 2 * p); // smoothstep for motion-based transitions
+  switch (type) {
+    case 'crossfade':
+      ctx.globalAlpha = 1 - p;
+      ctx.drawImage(img, 0, 0, W, H);
+      ctx.globalAlpha = 1;
+      break;
+    case 'fade': // dip through black
+      if (p < 0.5) {
+        ctx.drawImage(img, 0, 0, W, H);
+        ctx.fillStyle = `rgba(0,0,0,${p * 2})`;
+        ctx.fillRect(0, 0, W, H);
+      } else {
+        ctx.fillStyle = `rgba(0,0,0,${(1 - p) * 2})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+      break;
+    case 'slide': // outgoing slides off to the left, revealing incoming
+      ctx.drawImage(img, -sm * W, 0, W, H);
+      break;
+    case 'wipe': { // incoming is revealed left -> right
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(sm * W, 0, W - sm * W, H);
+      ctx.clip();
+      ctx.drawImage(img, 0, 0, W, H);
+      ctx.restore();
+      break;
+    }
+    case 'zoom': { // outgoing scales up and fades away
+      const s = 1 + sm * 0.6;
+      const dw = W * s, dh = H * s;
+      ctx.globalAlpha = 1 - p;
+      ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      ctx.globalAlpha = 1;
+      break;
+    }
+  }
 }
 
 function easeOutCubic(p) { return 1 - Math.pow(1 - p, 3); }
@@ -477,9 +563,11 @@ function renderLoop() {
   if (video.paused && !video.ended) return;
   const c = clips[playIdx];
   if (!c) { pause(); return; }
+  drawClipIdx = playIdx;
 
   // Reached the end of the current clip -> move to the next in edit order.
   if (video.ended || video.currentTime >= c.end - SEAM) {
+    snapshotOutgoing(playIdx + 1); // freeze this frame for the next clip's transition
     const next = clips[playIdx + 1];
     const contiguous = next && !video.ended && Math.abs(next.start - c.end) < 0.04;
     if (contiguous) {
@@ -541,7 +629,10 @@ function pause() {
   playBtn.textContent = '▶ Play';
   if (rafId) cancelAnimationFrame(rafId);
 }
-playBtn.addEventListener('click', () => (video.paused ? play() : pause()));
+playBtn.addEventListener('click', () => {
+  if (exporting) return; // the export pass owns playback
+  video.paused ? play() : pause();
+});
 
 function updateTimeLabel() {
   timeLabel.textContent = `${fmt(playheadEdited)} / ${fmt(editedDuration())}`;
@@ -552,18 +643,23 @@ function updateTimeLabel() {
 // ---------------------------------------------------------------------------
 function buildTimeline() {
   [...timeline.querySelectorAll('.block, .click-tick, .clip')].forEach((n) => n.remove());
+  transSnapIdx = -1; // any pending transition snapshot is stale after a rebuild
   const w = timeline.clientWidth;
   const total = editedDuration() || 1;
 
   // Clip track — the draggable, reorderable base layer.
   clips.forEach((c, ci) => {
+    const hasTrans = ci > 0 && c.transition && c.transition.type !== 'none';
     const el = document.createElement('div');
-    el.className = 'clip' + (c.id === selectedClipId ? ' selected' : '');
+    el.className = 'clip' + (c.id === selectedClipId ? ' selected' : '') + (hasTrans ? ' has-trans' : '');
     el.dataset.cidx = ci;
     el.style.left = `${(editedStartOf(ci) / total) * w}px`;
     el.style.width = `${(clipLen(c) / total) * w}px`;
-    el.title = 'Drag to reorder · ✕ or Delete to remove';
-    el.innerHTML = `<span class="clip-label">${fmt(clipLen(c))}</span><button class="clip-delete" title="Delete clip" tabindex="-1">✕</button>`;
+    el.title = hasTrans
+      ? `${c.transition.type} transition in · drag to reorder · ✕ or Delete to remove`
+      : 'Drag to reorder · ✕ or Delete to remove';
+    const badge = hasTrans ? `<span class="clip-trans" title="${c.transition.type} in">▶</span>` : '';
+    el.innerHTML = `${badge}<span class="clip-label">${fmt(clipLen(c))}</span><button class="clip-delete" title="Delete clip" tabindex="-1">✕</button>`;
     el.querySelector('.clip-delete').addEventListener('mousedown', (e) => e.stopPropagation());
     el.querySelector('.clip-delete').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -605,6 +701,8 @@ function buildTimeline() {
       timeline.appendChild(el);
     });
   });
+
+  updateTransitionControl();
 }
 
 function movePlayhead(te) {
@@ -616,6 +714,8 @@ function seekEdited(te) {
   te = clamp(te, 0, Math.max(0, editedDuration() - 0.001));
   const m = editedToSource(te);
   playIdx = m.idx;
+  drawClipIdx = m.idx;
+  transSnapIdx = -1; // a seek isn't a play-through; never composite a frozen frame
   playheadEdited = te;
   if (camReady) camVideo.currentTime = Math.min(m.src, camVideo.duration || m.src);
   if (cleanAudioActive) cleanAudio.currentTime = Math.min(m.src, cleanAudio.duration || m.src);
@@ -649,6 +749,7 @@ let drag = null;       // zoom move/resize
 let clipDrag = null;   // clip reorder
 
 timeline.addEventListener('mousedown', (e) => {
+  if (exporting) return; // don't seek/drag while the export is capturing
   const blockEl = e.target.closest('.block');
   if (blockEl) {
     const b = blocks[+blockEl.dataset.block];
@@ -670,6 +771,7 @@ timeline.addEventListener('mousedown', (e) => {
     selectedClipId = clips[ci].id;
     // Toggle selection in place (don't rebuild — it would invalidate clipEl).
     [...timeline.querySelectorAll('.clip')].forEach((el) => el.classList.toggle('selected', +el.dataset.cidx === ci));
+    updateTransitionControl();
     clipDrag = { idx: ci, el: clipEl, startX: e.clientX, moved: false, slot: ci };
     seekEdited(((e.clientX - rect.left) / rect.width) * editedDuration());
     e.preventDefault();
@@ -811,6 +913,7 @@ function clearZoom() {
 }
 
 function deleteBlock(b) {
+  if (exporting) return;
   const idx = blocks.indexOf(b);
   if (idx < 0) return;
   blocks.splice(idx, 1);
@@ -887,7 +990,7 @@ function updateUndoBtn() {
 }
 
 function undo() {
-  if (!clipHistory.length) return;
+  if (exporting || !clipHistory.length) return;
   clips = clipHistory.pop();
   if (!clips.some((c) => c.id === selectedClipId)) selectedClipId = null;
   updateUndoBtn();
@@ -896,6 +999,7 @@ function undo() {
 }
 
 function splitAtPlayhead() {
+  if (exporting) return;
   const m = editedToSource(playheadEdited);
   const c = m.clip;
   const t = m.src;
@@ -910,6 +1014,7 @@ function splitAtPlayhead() {
 }
 
 function deleteClip(id) {
+  if (exporting) return;
   const c = clips.find((x) => x.id === id);
   if (!c) return;
   if (clips.length <= 1) {
@@ -925,6 +1030,7 @@ function deleteClip(id) {
 
 // Move the clip at index `from` so it sits at insertion slot `to` (0..length).
 function moveClip(from, to) {
+  if (exporting) return;
   if (to > from) to--; // removing `from` first shifts later indices left
   to = clamp(to, 0, clips.length - 1);
   if (to === from) { buildTimeline(); return; }
@@ -941,9 +1047,36 @@ clearZoomBtn.addEventListener('click', clearZoom);
 splitBtn.addEventListener('click', splitAtPlayhead);
 undoBtn.addEventListener('click', undo);
 
+// Reflect the selected clip's intro transition in the picker.
+function updateTransitionControl() {
+  const c = selectedClip();
+  if (!c) {
+    clipTransition.disabled = true;
+    clipTransition.value = 'none';
+    clipTransition.title = 'Select a clip on the timeline first';
+    return;
+  }
+  clipTransition.value = (c.transition && c.transition.type) || 'none';
+  const isFirst = clips[0] && clips[0].id === c.id;
+  clipTransition.disabled = isFirst;
+  clipTransition.title = isFirst
+    ? 'The first clip has nothing to transition from — move it later to add one'
+    : 'How this clip enters from the previous one';
+}
+
+clipTransition.addEventListener('change', () => {
+  const c = selectedClip();
+  if (!c || exporting) return;
+  pushHistory();
+  if (clipTransition.value === 'none') delete c.transition;
+  else c.transition = { type: clipTransition.value, duration: DEFAULT_TRANSITION_DUR };
+  buildTimeline();
+});
+
 // Keyboard: Delete/Backspace removes the selected zoom (preferred) or clip;
 // 'S' splits at the playhead; Ctrl/Cmd+Z undoes the last clip edit.
 window.addEventListener('keydown', (e) => {
+  if (exporting) return; // ignore edit shortcuts during an export
   const el = document.activeElement;
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
 
@@ -1171,6 +1304,7 @@ async function runExport() {
 }
 
 function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
+  transSnapIdx = -1; // start the capture with no pending transition snapshot
   return new Promise((resolve, reject) => {
     // captureStream(0) = manual mode: we push exactly one frame per drawn frame
     // via requestFrame(), so no empty/duplicated frames sneak into the encoder.
@@ -1207,9 +1341,11 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
     step = (now) => {
       if (finished) return;
       if (skipping) return; // waiting on a 'seeked'; onSeeked re-arms the loop
+      drawClipIdx = segIdx;
 
       // Reached the end of the current clip.
       if (video.ended || video.currentTime >= seq[segIdx].end - 0.02) {
+        snapshotOutgoing(segIdx + 1); // freeze for the next clip's transition
         elapsedBefore += seq[segIdx].end - seq[segIdx].start;
         segIdx++;
         if (segIdx >= seq.length) {
@@ -1270,6 +1406,8 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
     const begin = () => {
       // Draw and capture the first frame BEFORE starting, so the opening
       // keyframe has real content rather than an empty (green) buffer.
+      transSnapIdx = -1; // no transition on the very first clip
+      drawClipIdx = 0;
       drawAt(video.currentTime);
       rec.start();
       pushFrame();

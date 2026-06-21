@@ -40,6 +40,17 @@
         <div class="group">
           <button id="splitBtn" title="Split the clip at the playhead (S)">✂ Split</button>
           <button id="undoBtn" disabled title="Undo last clip edit (Ctrl+Z)">↩ Undo</button>
+          <div class="slider">
+            <span>Transition</span>
+            <select id="clipTransition" disabled title="Select a clip first">
+              <option value="none">None (cut)</option>
+              <option value="fade">Fade</option>
+              <option value="crossfade">Crossfade</option>
+              <option value="slide">Slide</option>
+              <option value="wipe">Wipe</option>
+              <option value="zoom">Zoom</option>
+            </select>
+          </div>
         </div>
         <div class="sep"></div>
         <div class="group">
@@ -138,7 +149,8 @@
         Tip: click a zoom block on the timeline to select it, drag its middle to move it, drag its
         edges to resize, and use <b>Zoom level</b> to change just that block. Double-click a block to delete it.
         Use <b>✂ Split</b> (or press <b>S</b>) to cut at the playhead, <b>drag clips</b> to reorder them, and
-        select a clip then press <b>Delete</b> (✕) to remove it. <b>Ctrl+Z</b> undoes clip edits.
+        select a clip then press <b>Delete</b> (✕) to remove it. Pick a <b>Transition</b> for the selected clip to
+        set how it enters from the previous one (it follows the clip when you reorder). <b>Ctrl+Z</b> undoes clip edits.
       </p>
 
       <div class="editor-controls">

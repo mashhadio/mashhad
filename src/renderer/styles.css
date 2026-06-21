@@ -312,6 +312,13 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent);
 .timeline .clip:hover .clip-delete,
 .timeline .clip.selected .clip-delete { display: flex; }
 .timeline .clip-delete:hover { background: #ff5563; }
+/* Clip with an intro transition: accent the left (incoming) edge + badge. */
+.timeline .clip.has-trans { border-left: 2px solid var(--accent); }
+.timeline .clip-trans {
+  position: absolute; top: 3px; left: 4px;
+  font-size: 8px; line-height: 1; color: var(--accent);
+  pointer-events: none; user-select: none; opacity: 0.95;
+}
 /* Insertion indicator shown while dragging a clip to a new slot. */
 .timeline .clip-insert {
   position: absolute; top: 0; bottom: 0; width: 3px; z-index: 6;
