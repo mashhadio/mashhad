@@ -10,11 +10,11 @@
       <stop offset="0.5" stop-color="#56A8F0"/>
       <stop offset="1" stop-color="#8B5CF6"/>
     </linearGradient>
-    <linearGradient id="play" x1="400" y1="380" x2="620" y2="640" gradientUnits="userSpaceOnUse">
+    <linearGradient id="play" x1="400" y1="380" x2="600" y2="640" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#2DD4E0"/>
       <stop offset="1" stop-color="#4E9BEF"/>
     </linearGradient>
-    <linearGradient id="blade" x1="520" y1="340" x2="760" y2="600" gradientUnits="userSpaceOnUse">
+    <linearGradient id="blade" x1="556" y1="360" x2="772" y2="580" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#6E86F0"/>
       <stop offset="1" stop-color="#9B6CF8"/>
     </linearGradient>
@@ -35,11 +35,11 @@
     <path d="M626 756 L704 756 A52 52 0 0 0 756 704 L756 626"/>
   </g>
 
-  <!-- Blade (behind) -->
-  <path d="M516 356 L516 566 L752 470 Z" fill="url(#blade)"
+  <!-- Forward blade (behind, upper-right) -->
+  <path d="M556 372 L556 580 L772 476 Z" fill="url(#blade)"
         stroke="url(#blade)" stroke-width="26" stroke-linejoin="round" stroke-linecap="round"/>
   <!-- Play (front) -->
-  <path d="M414 388 L414 636 L612 512 Z" fill="url(#play)"
+  <path d="M414 392 L414 632 L600 512 Z" fill="url(#play)"
         stroke="url(#play)" stroke-width="26" stroke-linejoin="round" stroke-linecap="round"/>
 
   <!-- Recording dot -->
