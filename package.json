@@ -10,7 +10,8 @@
     "start": "electron .",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
-    "dist:mac": "electron-builder --mac"
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
   },
   "devDependencies": {
     "electron": "^31.7.7",
@@ -24,6 +25,8 @@
   "build": {
     "appId": "com.abdul.mashhad",
     "productName": "مشهد",
+    "executableName": "Mashhad",
+    "artifactName": "Mashhad-${version}-${arch}.${ext}",
     "files": [
       "src/**/*",
       "assets/**/*",
@@ -36,6 +39,18 @@
     ],
     "win": {
       "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "مشهد"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "AudioVideo",
+      "synopsis": "مسجّل شاشة مع تكبير ذكي يتتبّع المؤشر",
+      "executableName": "Mashhad"
     },
     "mac": {
       "target": ["dmg", "zip"],
