@@ -173,9 +173,23 @@ async function init() {
   drawAt(0);
   buildTimeline();
   updateTimeLabel();
+  setupPanels();
 
   // Prepare the cleaned-audio preview in the background for the current profile.
   if (project.hasAudio && noiseProfile.value !== 'off') applyAudioPreview(noiseProfile.value);
+}
+
+// Inspector sections collapse on header click; the open/closed state persists.
+function setupPanels() {
+  document.querySelectorAll('.editor-controls[data-panel] > .panel-title').forEach((btn) => {
+    const panel = btn.closest('.editor-controls');
+    const key = `panel.${panel.dataset.panel}`;
+    if (Prefs.get(key, false)) panel.classList.add('collapsed');
+    btn.addEventListener('click', () => {
+      const collapsed = panel.classList.toggle('collapsed');
+      Prefs.set(key, collapsed);
+    });
+  });
 }
 
 // Apply saved preferences to the editor controls, then persist on change.
@@ -697,11 +711,9 @@ function buildTimeline() {
       el.dataset.clip = ci;
       el.style.left = `${(es / total) * w}px`;
       el.style.width = `${Math.max(10, ((ee - es) / total) * w)}px`;
-      el.title = `تكبير ${b.scale.toFixed(1)}× — اسحب للتحريك، الحواف لتغيير الحجم، ✕ أو Backspace للحذف`;
-      el.innerHTML = `<div class="handle l"></div><span>${b.scale.toFixed(1)}×</span><button class="block-delete" title="حذف التكبير" tabindex="-1">✕</button><div class="handle r"></div>`;
+      el.title = `تكبير ${b.scale.toFixed(1)}× — اسحب للتحريك، الحواف لتغيير الحجم، نقر مزدوج أو Backspace للحذف`;
+      el.innerHTML = `<div class="handle l"></div><span>${b.scale.toFixed(1)}×</span><div class="handle r"></div>`;
       el.addEventListener('dblclick', (ev) => { ev.stopPropagation(); deleteBlock(b); });
-      el.querySelector('.block-delete').addEventListener('mousedown', (ev) => ev.stopPropagation());
-      el.querySelector('.block-delete').addEventListener('click', (ev) => { ev.stopPropagation(); deleteBlock(b); });
       timeline.appendChild(el);
     });
   });

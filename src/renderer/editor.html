@@ -41,8 +41,8 @@
 
         <aside class="inspector">
       <!-- 1 · المقاطع -->
-      <div class="editor-controls">
-        <span class="panel-title">المقاطع</span>
+      <div class="editor-controls" data-panel="clips">
+        <button class="panel-title" type="button"><span class="panel-ic">🎬</span><span class="panel-name">المقاطع</span><span class="panel-chev">▾</span></button>
         <div class="group">
           <button id="splitBtn" title="قسّم المقطع عند المؤشر (S)">✂ تقسيم</button>
           <button id="undoBtn" disabled title="تراجع عن آخر تعديل (Ctrl+Z)">↩ تراجع</button>
@@ -64,8 +64,8 @@
       </div>
 
       <!-- 2 · التكبير -->
-      <div class="editor-controls">
-        <span class="panel-title">التكبير</span>
+      <div class="editor-controls" data-panel="zoom">
+        <button class="panel-title" type="button"><span class="panel-ic">🔍</span><span class="panel-name">التكبير</span><span class="panel-chev">▾</span></button>
         <div class="group">
           <button class="btn-primary" id="autoZoomBtn">✨ تكبير تلقائي عند النقر</button>
           <button id="addZoomBtn">＋ تكبير هنا</button>
@@ -85,8 +85,8 @@
       </div>
 
       <!-- 3 · تأثيرات النقر -->
-      <div class="editor-controls">
-        <span class="panel-title">تأثيرات النقر</span>
+      <div class="editor-controls" data-panel="clickfx">
+        <button class="panel-title" type="button"><span class="panel-ic">🖱️</span><span class="panel-name">تأثيرات النقر</span><span class="panel-chev">▾</span></button>
         <div class="group">
           <label class="switch"><input type="checkbox" id="clickFx" checked /> إبراز النقر</label>
           <div class="slider">
@@ -126,8 +126,8 @@
       </div>
 
       <!-- 4 · الكاميرا -->
-      <div class="editor-controls" id="camControls" style="display:none">
-        <span class="panel-title">الكاميرا</span>
+      <div class="editor-controls" id="camControls" data-panel="cam" style="display:none">
+        <button class="panel-title" type="button"><span class="panel-ic">🎥</span><span class="panel-name">الكاميرا</span><span class="panel-chev">▾</span></button>
         <div class="group">
           <label class="switch"><input type="checkbox" id="camShow" checked /> إظهار الكاميرا</label>
         </div>
@@ -157,8 +157,8 @@
       </div>
 
       <!-- 5 · الصوت -->
-      <div class="editor-controls">
-        <span class="panel-title">الصوت</span>
+      <div class="editor-controls" data-panel="audio">
+        <button class="panel-title" type="button"><span class="panel-ic">🎙️</span><span class="panel-name">الصوت</span><span class="panel-chev">▾</span></button>
         <div class="group">
           <div class="slider">
             <span>تنقية الميكروفون <span class="status" id="audioStatus" style="font-size:11px"></span></span>
@@ -173,8 +173,8 @@
       </div>
 
       <!-- 6 · التصدير -->
-      <div class="editor-controls export-section">
-        <span class="panel-title">التصدير</span>
+      <div class="editor-controls export-section" data-panel="export">
+        <button class="panel-title" type="button"><span class="panel-ic">📤</span><span class="panel-name">التصدير</span><span class="panel-chev">▾</span></button>
         <div class="group">
           <div class="slider">
             <span>الصيغة</span>

@@ -79,6 +79,11 @@ button:hover { background: #2a2f42; }
 button:active { transform: translateY(1px); }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 
+/* Keyboard focus rings (mouse clicks don't trigger :focus-visible). */
+button:focus-visible, select:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+
 .btn-primary { background: var(--accent); }
 .btn-primary:hover { background: var(--accent-2); }
 .btn-danger { background: var(--danger); }
@@ -104,7 +109,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   font-size: 16px;
   margin: 0;
   font-weight: 700;
-  letter-spacing: 0.2px;
+  letter-spacing: normal;
 }
 .topbar .spacer { flex: 1; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
@@ -112,7 +117,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .content { flex: 1; overflow: auto; padding: 22px; }
 
 /* ---- Home ---- */
-.section-title { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin: 0 0 12px; }
+/* Arabic is cursive — letter-spacing breaks the joins, so headers use normal spacing. */
+.section-title { font-size: 13px; color: var(--muted); letter-spacing: normal; margin: 0 0 12px; }
 
 .sources-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .tabs { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
@@ -334,18 +340,6 @@ kbd {
 .timeline .block .handle.l { left: 0; border-radius: 6px 0 0 6px; }
 .timeline .block .handle.r { right: 0; border-radius: 0 6px 6px 0; }
 .timeline .block:hover .handle { background: rgba(255,255,255,0.5); }
-.timeline .block .block-delete {
-  position: absolute; top: 2px; right: 2px;
-  width: 16px; height: 16px; padding: 0;
-  display: none; align-items: center; justify-content: center;
-  border: none; border-radius: 50%;
-  background: rgba(0,0,0,0.45); color: #fff;
-  font-size: 9px; line-height: 1; cursor: pointer;
-  z-index: 2;
-}
-.timeline .block:hover .block-delete,
-.timeline .block.selected .block-delete { display: flex; }
-.timeline .block .block-delete:hover { background: #ff5563; }
 /* Clip track: the draggable, reorderable base layer of the timeline. */
 .timeline .clip {
   position: absolute; top: 2px; bottom: 2px; z-index: 1;
@@ -417,22 +411,36 @@ kbd {
 .inspector .editor-controls {
   margin-top: 0; flex-direction: column; align-items: stretch; gap: 12px;
 }
+.inspector .panel-title { flex-basis: auto; }
 .inspector .editor-controls .sep { display: none; }
-.inspector .editor-controls .group { width: 100%; flex-wrap: wrap; }
+.inspector .editor-controls .group { width: 100%; flex-wrap: wrap; gap: 8px; }
 .inspector .slider { width: 100%; }
 .inspector .slider input[type="range"] { width: 100%; }
-.inspector .export-section .export-bar { margin-top: 12px; }
+.inspector select { width: 100%; }
+/* Prominent, full-width export action. */
+.inspector .export-section .export-bar { margin-top: 12px; flex-wrap: wrap; gap: 10px; }
+.inspector .export-section #exportBtn { width: 100%; padding: 12px; font-size: 15px; }
+.inspector .export-section .progress { flex-basis: 100%; }
+.inspector .export-section .status { flex-basis: 100%; }
 
 .editor-controls {
   display: flex; align-items: center; gap: 14px; margin-top: 12px; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
 }
-/* Section header that sits above a panel's controls (forces them to wrap below). */
+/* Collapsible section header (forces a panel's controls to wrap/stack below). */
 .panel-title {
-  flex-basis: 100%; margin: 0 0 2px;
-  font-size: 11px; font-weight: 700; letter-spacing: 1px;
-  text-transform: uppercase; color: var(--muted);
+  flex-basis: 100%; width: 100%; margin: 0;
+  display: flex; align-items: center; gap: 8px;
+  background: transparent; border: 0; padding: 0; border-radius: 0;
+  cursor: pointer; color: var(--muted);
+  font-size: 12px; font-weight: 700; letter-spacing: normal; text-align: start;
 }
+.panel-title:hover { background: transparent; color: var(--text); }
+.panel-ic { font-size: 14px; line-height: 1; flex: none; }
+.panel-name { flex: 1; }
+.panel-chev { font-size: 11px; opacity: 0.7; transition: transform 0.15s ease; }
+.editor-controls.collapsed .panel-chev { transform: rotate(-90deg); }
+.editor-controls.collapsed > :not(.panel-title) { display: none; }
 .editor-controls .group { display: flex; align-items: center; gap: 8px; }
 .editor-controls .sep { width: 1px; height: 28px; background: var(--border); }
 /* Export action spans the full width under its settings. */
