@@ -80,6 +80,9 @@ let drawClipIdx = 0;        // clip index the current frame belongs to
 // snapshot its last frame to an offscreen canvas, then composite that frozen
 // "outgoing" frame over the incoming clip's first `duration` seconds.
 const DEFAULT_TRANSITION_DUR = 0.5;
+const TRANSITION_LABELS = {
+  fade: 'تلاشٍ', crossfade: 'تلاشٍ متقاطع', slide: 'انزلاق', wipe: 'مسح', zoom: 'تكبير',
+};
 const transCanvas = document.createElement('canvas');
 const transCtx = transCanvas.getContext('2d', { alpha: false });
 let transSnapIdx = -1;      // incoming clip index the snapshot is the outgoing frame for
@@ -133,7 +136,7 @@ async function init() {
   noiseProfile.disabled = !project.hasAudio;
   if (!project.hasAudio) {
     noiseProfile.value = 'off';
-    noiseProfile.title = 'No microphone was recorded';
+    noiseProfile.title = 'لم يُسجَّل أي ميكروفون';
   }
 
   video.src = project.videoUrl;
@@ -184,7 +187,7 @@ function applyEditorPrefs() {
   zoomLevelVal.textContent = `${defaultScale.toFixed(1)}×`;
 
   smoothRamp.value = Prefs.get('smooth', 0.55);
-  smoothVal.textContent = `${parseFloat(smoothRamp.value).toFixed(2)}s`;
+  smoothVal.textContent = `${parseFloat(smoothRamp.value).toFixed(2)}ث`;
 
   // Click highlight
   clickFx.checked = Prefs.get('clickFx', true);
@@ -515,7 +518,7 @@ async function applyAudioPreview(profile) {
     return;
   }
 
-  audioStatus.textContent = '· preparing…';
+  audioStatus.textContent = '· جارٍ التحضير…';
   let url = null;
   try {
     url = await window.api.previewAudio(profile);
@@ -524,7 +527,7 @@ async function applyAudioPreview(profile) {
     cleanAudioActive = false; // fall back to the raw track rather than a stale one
     cleanAudio.pause();
     updateAudioRouting();
-    audioStatus.textContent = '· preview failed (raw audio)';
+    audioStatus.textContent = '· تعذّرت المعاينة (صوت خام)';
     return;
   }
   if (myToken !== audioPreviewToken) return; // a newer request superseded this
@@ -539,7 +542,7 @@ async function applyAudioPreview(profile) {
   cleanAudio.currentTime = video.currentTime;
   updateAudioRouting();
   if (!video.paused) cleanAudio.play().catch(() => {});
-  audioStatus.textContent = '· cleaned ✓';
+  audioStatus.textContent = '· مُنقّى ✓';
 }
 
 // Advance the source <video> to the start of the next clip in edit order.
@@ -619,14 +622,14 @@ function play() {
   video.play();
   if (camReady) camVideo.play().catch(() => {});
   if (cleanAudioActive) { cleanAudio.currentTime = video.currentTime; cleanAudio.play().catch(() => {}); }
-  playBtn.textContent = '⏸ Pause';
+  playBtn.textContent = '⏸ إيقاف مؤقت';
   renderLoop();
 }
 function pause() {
   video.pause();
   if (camReady) camVideo.pause();
   cleanAudio.pause();
-  playBtn.textContent = '▶ Play';
+  playBtn.textContent = '▶ تشغيل';
   if (rafId) cancelAnimationFrame(rafId);
 }
 playBtn.addEventListener('click', () => {
@@ -655,11 +658,12 @@ function buildTimeline() {
     el.dataset.cidx = ci;
     el.style.left = `${(editedStartOf(ci) / total) * w}px`;
     el.style.width = `${(clipLen(c) / total) * w}px`;
+    const transLabel = hasTrans ? (TRANSITION_LABELS[c.transition.type] || c.transition.type) : '';
     el.title = hasTrans
-      ? `${c.transition.type} transition in · drag to reorder · ✕ or Delete to remove`
-      : 'Drag to reorder · ✕ or Delete to remove';
-    const badge = hasTrans ? `<span class="clip-trans" title="${c.transition.type} in">▶</span>` : '';
-    el.innerHTML = `${badge}<span class="clip-label">${fmt(clipLen(c))}</span><button class="clip-delete" title="Delete clip" tabindex="-1">✕</button>`;
+      ? `انتقال ${transLabel} · اسحب لإعادة الترتيب · ✕ أو Delete للحذف`
+      : 'اسحب لإعادة الترتيب · ✕ أو Delete للحذف';
+    const badge = hasTrans ? `<span class="clip-trans" title="انتقال ${transLabel}">▶</span>` : '';
+    el.innerHTML = `${badge}<span class="clip-label">${fmt(clipLen(c))}</span><button class="clip-delete" title="حذف المقطع" tabindex="-1">✕</button>`;
     el.querySelector('.clip-delete').addEventListener('mousedown', (e) => e.stopPropagation());
     el.querySelector('.clip-delete').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -693,8 +697,8 @@ function buildTimeline() {
       el.dataset.clip = ci;
       el.style.left = `${(es / total) * w}px`;
       el.style.width = `${Math.max(10, ((ee - es) / total) * w)}px`;
-      el.title = `Zoom ${b.scale.toFixed(1)}× — drag to move, edges to resize, ✕ or Backspace to delete`;
-      el.innerHTML = `<div class="handle l"></div><span>${b.scale.toFixed(1)}×</span><button class="block-delete" title="Delete zoom" tabindex="-1">✕</button><div class="handle r"></div>`;
+      el.title = `تكبير ${b.scale.toFixed(1)}× — اسحب للتحريك، الحواف لتغيير الحجم، ✕ أو Backspace للحذف`;
+      el.innerHTML = `<div class="handle l"></div><span>${b.scale.toFixed(1)}×</span><button class="block-delete" title="حذف التكبير" tabindex="-1">✕</button><div class="handle r"></div>`;
       el.addEventListener('dblclick', (ev) => { ev.stopPropagation(); deleteBlock(b); });
       el.querySelector('.block-delete').addEventListener('mousedown', (ev) => ev.stopPropagation());
       el.querySelector('.block-delete').addEventListener('click', (ev) => { ev.stopPropagation(); deleteBlock(b); });
@@ -734,11 +738,11 @@ function selectBlock(b) {
   if (b) {
     zoomLevel.value = b.scale;
     zoomLevelVal.textContent = `${b.scale.toFixed(1)}×`;
-    zoomLevelLabel.innerHTML = `Selected zoom: <b id="zoomLevelVal">${b.scale.toFixed(1)}×</b>`;
+    zoomLevelLabel.innerHTML = `التكبير المحدد: <b id="zoomLevelVal">${b.scale.toFixed(1)}×</b>`;
   } else {
     zoomLevel.value = defaultScale;
     zoomLevelVal.textContent = `${defaultScale.toFixed(1)}×`;
-    zoomLevelLabel.innerHTML = `New zoom level: <b id="zoomLevelVal">${defaultScale.toFixed(1)}×</b>`;
+    zoomLevelLabel.innerHTML = `مستوى تكبير جديد: <b id="zoomLevelVal">${defaultScale.toFixed(1)}×</b>`;
   }
   [...timeline.querySelectorAll('.block')].forEach((el) => {
     el.classList.toggle('selected', blocks[+el.dataset.block] === selectedBlock);
@@ -1018,7 +1022,7 @@ function deleteClip(id) {
   const c = clips.find((x) => x.id === id);
   if (!c) return;
   if (clips.length <= 1) {
-    topStatus.textContent = "Can't delete the last remaining clip.";
+    topStatus.textContent = 'لا يمكن حذف المقطع الأخير المتبقّي.';
     return;
   }
   pushHistory();
@@ -1053,15 +1057,15 @@ function updateTransitionControl() {
   if (!c) {
     clipTransition.disabled = true;
     clipTransition.value = 'none';
-    clipTransition.title = 'Select a clip on the timeline first';
+    clipTransition.title = 'اختر مقطعًا من الخط الزمني أولًا';
     return;
   }
   clipTransition.value = (c.transition && c.transition.type) || 'none';
   const isFirst = clips[0] && clips[0].id === c.id;
   clipTransition.disabled = isFirst;
   clipTransition.title = isFirst
-    ? 'The first clip has nothing to transition from — move it later to add one'
-    : 'How this clip enters from the previous one';
+    ? 'المقطع الأول ليس له ما ينتقل منه — حرّكه لاحقًا لإضافة انتقال'
+    : 'كيف يدخل هذا المقطع من المقطع السابق';
 }
 
 clipTransition.addEventListener('change', () => {
@@ -1073,12 +1077,44 @@ clipTransition.addEventListener('change', () => {
   buildTimeline();
 });
 
-// Keyboard: Delete/Backspace removes the selected zoom (preferred) or clip;
-// 'S' splits at the playhead; Ctrl/Cmd+Z undoes the last clip edit.
+// Keyboard-shortcuts reference modal (declared before the edit-shortcut handler
+// below, which reads `shortcutsModal` to suspend shortcuts while it's open).
+const shortcutsModal = document.getElementById('shortcutsModal');
+const shortcutsBtn = document.getElementById('shortcutsBtn');
+const closeShortcuts = document.getElementById('closeShortcuts');
+function toggleShortcuts(open) {
+  shortcutsModal.classList.toggle('open', open ?? !shortcutsModal.classList.contains('open'));
+}
+shortcutsBtn.addEventListener('click', () => toggleShortcuts());
+closeShortcuts.addEventListener('click', () => toggleShortcuts(false));
+shortcutsModal.addEventListener('click', (e) => { if (e.target === shortcutsModal) toggleShortcuts(false); });
+window.addEventListener('keydown', (e) => {
+  const el = document.activeElement;
+  const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
+  if (e.key === 'Escape') toggleShortcuts(false);
+  else if ((e.key === '?' || e.key === '؟') && !typing) toggleShortcuts(true);
+});
+
+// Keyboard: Space plays/pauses, ←/→ seek; Delete removes the selected zoom or
+// clip; 'S' splits at the playhead; Ctrl/Cmd+Z undoes the last clip edit.
 window.addEventListener('keydown', (e) => {
   if (exporting) return; // ignore edit shortcuts during an export
+  if (shortcutsModal.classList.contains('open')) return; // modal owns the keyboard
   const el = document.activeElement;
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+
+  if (e.key === ' ' || e.key === 'Spacebar') {
+    e.preventDefault();
+    video.paused ? play() : pause();
+    return;
+  }
+
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const step = (e.shiftKey ? 5 : 1) * (e.key === 'ArrowRight' ? 1 : -1);
+    seekEdited(playheadEdited + step);
+    return;
+  }
 
   if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
     e.preventDefault();
@@ -1119,7 +1155,7 @@ zoomLevel.addEventListener('input', () => {
 });
 
 smoothRamp.addEventListener('input', () => {
-  smoothVal.textContent = `${parseFloat(smoothRamp.value).toFixed(2)}s`;
+  smoothVal.textContent = `${parseFloat(smoothRamp.value).toFixed(2)}ث`;
   rebuildEngine();
   drawAt(video.currentTime);
 });
@@ -1187,7 +1223,7 @@ clickVol.addEventListener('input', () => { clickVolVal.textContent = `${clickVol
 const testFxBtn = document.getElementById('testFxBtn');
 testFxBtn.addEventListener('click', () => {
   if (!clickTimes.length) {
-    topStatus.textContent = 'No clicks were recorded in this clip to preview.';
+    topStatus.textContent = 'لا توجد نقرات مُسجَّلة في هذا المقطع للمعاينة.';
     return;
   }
   topStatus.textContent = '';
@@ -1249,7 +1285,7 @@ async function runExport() {
   exportBtn.disabled = true;
   progress.classList.add('active');
   progressFill.style.width = '0%';
-  exportStatus.textContent = 'Rendering zoom + webcam…';
+  exportStatus.textContent = 'جارٍ معالجة التكبير والكاميرا…';
 
   // Use a much higher intermediate bitrate for the editing master so the
   // canvas-render generation doesn't soften the final.
@@ -1258,7 +1294,7 @@ async function runExport() {
     progressFill.style.width = `${Math.round(p * 60)}%`;
   }, interBitrate);
 
-  exportStatus.textContent = 'Encoding & cleaning audio…';
+  exportStatus.textContent = 'جارٍ الترميز وتنقية الصوت…';
   progressFill.style.width = '70%';
 
   const off = window.api.onExportProgress((line) => { exportStatus.textContent = line; });
@@ -1286,15 +1322,15 @@ async function runExport() {
     });
     off();
     if (res.canceled) {
-      exportStatus.textContent = 'Export canceled.';
+      exportStatus.textContent = 'أُلغِي التصدير.';
     } else {
       progressFill.style.width = '100%';
-      exportStatus.textContent = 'Done! Saved to ' + res.outputPath;
+      exportStatus.textContent = 'تم! حُفظ في ' + res.outputPath;
       await window.api.revealFile(res.outputPath);
     }
   } catch (err) {
     off();
-    exportStatus.textContent = 'Export failed: ' + err.message;
+    exportStatus.textContent = 'فشل التصدير: ' + err.message;
     console.error(err);
   } finally {
     progress.classList.remove('active');
@@ -1321,7 +1357,7 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
       updateAudioRouting(); // restore preview audio routing
       resolve(await new Blob(parts, { type: 'video/webm' }).arrayBuffer());
     };
-    rec.onerror = (e) => { updateAudioRouting(); reject(e.error || new Error('Recorder error')); };
+    rec.onerror = (e) => { updateAudioRouting(); reject(e.error || new Error('خطأ في المُسجِّل')); };
 
     const pushFrame = () => { if (track.requestFrame) track.requestFrame(); };
 
@@ -1442,5 +1478,5 @@ backBtn.addEventListener('click', () => window.api.backHome());
 
 init().catch((e) => {
   console.error(e);
-  topStatus.textContent = 'Error: ' + e.message;
+  topStatus.textContent = 'خطأ: ' + e.message;
 });

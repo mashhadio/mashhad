@@ -1,123 +1,132 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: file:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' blob:; connect-src 'self' blob: data:; worker-src 'self' blob:;" />
-  <title>Smooth Screen Recorder</title>
+        content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: file:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' blob:; connect-src 'self' blob: data:; worker-src 'self' blob:;" />
+  <title>مشهد</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div class="app">
     <div class="topbar">
       <div class="dot"></div>
-      <h1>Smooth Screen Recorder</h1>
-      <div class="spacer"></div>
+      <h1>مشهد</h1>
       <span class="status" id="topStatus"></span>
+      <div class="spacer"></div>
+      <span class="recording-banner" id="recBanner">
+        <span class="rec-dot"></span>
+        <span class="timer" id="timer">00:00</span>
+        <button class="btn-danger" id="stopBtn">⏹ إيقاف وتعديل</button>
+      </span>
+      <span class="hotkey-chip" title="اختصار عام لبدء/إيقاف التسجيل"><kbd id="hotkeyHint">Ctrl+Shift+R</kbd></span>
+      <button class="btn-primary" id="recordBtn" disabled>● بدء التسجيل</button>
+      <button class="btn-ghost" id="shortcutsBtn" title="اختصارات لوحة المفاتيح">⌨ اختصارات</button>
     </div>
 
     <div class="content">
       <div class="perm-banner" id="permBanner">
         <div class="perm-icon">⚠️</div>
         <div class="perm-text">
-          <strong>Screen Recording is turned off for this app.</strong>
-          <span>Enable it in System Settings, then <b>quit and reopen</b> the app to record.</span>
+          <strong>تسجيل الشاشة موقَّف لهذا التطبيق.</strong>
+          <span>فعّله من إعدادات النظام، ثم <b>أغلق التطبيق وأعد فتحه</b> لبدء التسجيل.</span>
         </div>
         <div class="spacer" style="flex:1"></div>
-        <button class="btn-primary" id="openScreenSettingsBtn">Open System Settings</button>
-      </div>
-
-      <div class="recording-banner" id="recBanner">
-        <div class="rec-dot"></div>
-        <div>Recording…</div>
-        <div class="timer" id="timer">00:00</div>
-        <div class="spacer" style="flex:1"></div>
-        <button class="btn-danger" id="stopBtn">Stop &amp; Edit</button>
+        <button class="btn-primary" id="openScreenSettingsBtn">فتح إعدادات النظام</button>
       </div>
 
       <div class="sources-header">
-        <p class="section-title" style="margin:0">1 · Choose what to record</p>
+        <p class="section-title" style="margin:0">1 · اختر ما تريد تسجيله</p>
         <div class="spacer" style="flex:1"></div>
         <div class="tabs">
-          <button class="tab selected" id="tabScreens" data-kind="screen">Screens</button>
-          <button class="tab" id="tabWindows" data-kind="window">Windows</button>
+          <button class="tab selected" id="tabScreens" data-kind="screen">الشاشات</button>
+          <button class="tab" id="tabWindows" data-kind="window">النوافذ</button>
         </div>
-        <button class="btn-ghost" id="refreshSources" title="Refresh list">↻ Refresh</button>
+        <button class="btn-ghost" id="refreshSources" title="تحديث القائمة">↻ تحديث</button>
       </div>
       <p class="hint source-hint" id="sourceHint"></p>
 
       <div class="source-row">
         <div class="field" style="flex:1">
-          <label for="sourceSelect">Source</label>
+          <label for="sourceSelect">المصدر</label>
           <select id="sourceSelect"></select>
         </div>
         <div class="field" id="areaField">
-          <label>Recording area</label>
+          <label>منطقة التسجيل</label>
           <div class="area-controls">
-            <button class="btn-ghost" id="selectAreaBtn" disabled>⬚ Select area…</button>
+            <button class="btn-ghost" id="selectAreaBtn" disabled>⬚ تحديد منطقة…</button>
             <span class="region-chip" id="regionChip" style="display:none">
               <span id="regionChipText"></span>
-              <button class="region-clear" id="regionClear" title="Record full screen instead">✕</button>
+              <button class="region-clear" id="regionClear" title="تسجيل الشاشة كاملة بدلاً من ذلك">✕</button>
             </span>
           </div>
         </div>
       </div>
 
       <div class="preview-stage" id="previewStage">
-        <div class="preview-placeholder" id="previewPlaceholder">Select a source to preview what will be recorded</div>
+        <div class="preview-placeholder" id="previewPlaceholder">اختر مصدرًا لمعاينة ما سيُسجَّل</div>
         <video id="screenPreviewVideo" autoplay muted playsinline></video>
         <div class="region-outline" id="regionOutline" style="display:none"></div>
         <canvas id="camPreview" class="cam-overlay" style="display:none"></canvas>
       </div>
 
+      <p class="section-title" style="margin:24px 0 12px">2 · الإعدادات وبدء التسجيل</p>
       <div class="controls-row">
         <div class="field">
-          <label for="micSelect">Microphone</label>
+          <label for="micSelect">الميكروفون</label>
           <select id="micSelect"></select>
         </div>
         <div class="field">
-          <label for="camSelect">Camera</label>
+          <label for="camSelect">الكاميرا</label>
           <select id="camSelect"></select>
         </div>
         <div class="field">
-          <label for="fpsSelect">Frame rate</label>
+          <label for="fpsSelect">معدل الإطارات</label>
           <select id="fpsSelect">
-            <option value="30">30 fps</option>
-            <option value="60" selected>60 fps</option>
+            <option value="30">30 إطار/ث</option>
+            <option value="60" selected>60 إطار/ث</option>
           </select>
         </div>
         <div class="field">
           <label>&nbsp;</label>
-          <label class="switch"><input type="checkbox" id="micEnabled" checked /> Microphone</label>
+          <label class="switch"><input type="checkbox" id="micEnabled" checked /> الميكروفون</label>
         </div>
         <div class="field">
           <label>&nbsp;</label>
-          <label class="switch"><input type="checkbox" id="camEnabled" /> Webcam overlay</label>
-        </div>
-        <div class="field">
-          <label>&nbsp;</label>
-          <button class="btn-primary" id="recordBtn" disabled>● Start Recording</button>
+          <label class="switch"><input type="checkbox" id="camEnabled" /> عرض الكاميرا</label>
         </div>
       </div>
 
       <div id="camPreviewBox" class="cam-controls-row" style="display:none">
-        <label class="switch"><input type="checkbox" id="blurEnabled" /> Blur background</label>
+        <label class="switch"><input type="checkbox" id="blurEnabled" /> تمويه الخلفية</label>
         <div class="slider" id="blurAmountWrap" style="display:none">
-          <span>Blur strength: <b id="blurAmountVal">12</b></span>
+          <span>قوة التمويه: <b id="blurAmountVal">12</b></span>
           <input type="range" id="blurAmount" min="4" max="30" step="1" value="12" />
         </div>
         <span class="status" id="camStatus"></span>
       </div>
 
       <p class="hint">
-        Tip: pick the screen, then click <b>Start Recording</b> (or press <b id="hotkeyHint">Ctrl+Shift+R</b>).
-        Your cursor movements and clicks are tracked automatically so the editor can add smooth zoom-ins.
+        نصيحة: اختر الشاشة ثم اضغط <b>بدء التسجيل</b> في الأعلى. تُتتبَّع حركات المؤشر ونقراته
+        تلقائيًا ليتمكّن المحرر من إضافة تكبير سلس.
       </p>
 
       <div id="librarySection" style="display:none; margin-top:28px">
-        <p class="section-title">Recent recordings</p>
+        <p class="section-title">التسجيلات الأخيرة</p>
         <div id="library" class="library"></div>
       </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="shortcutsModal">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>اختصارات لوحة المفاتيح</h3>
+        <button class="modal-x" id="closeShortcuts" aria-label="إغلاق">✕</button>
+      </div>
+      <div class="shortcut-row"><span>بدء / إيقاف التسجيل</span><span class="keys"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>R</kbd></span></div>
+      <div class="shortcut-row"><span>إلغاء تحديد المنطقة</span><span class="keys"><kbd>Esc</kbd></span></div>
+      <div class="shortcut-row"><span>عرض هذه القائمة</span><span class="keys"><kbd>?</kbd></span></div>
     </div>
   </div>
 

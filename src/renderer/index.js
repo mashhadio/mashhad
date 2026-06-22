@@ -68,12 +68,12 @@ let currentKind = 'screen';
 
 const SOURCE_HINTS = {
   screen:
-    '🖥️ <b>Screen</b> — records an entire monitor (wallpaper, taskbar, every app). ' +
-    'Best choice: the smooth <b>cursor-follow zoom</b> and click effects only work with full-screen recordings.',
+    '🖥️ <b>الشاشة</b> — تُسجّل شاشة كاملة (الخلفية وشريط المهام وكل التطبيقات). ' +
+    'الخيار الأفضل: <b>التكبير المتتبِّع للمؤشر</b> وتأثيرات النقر تعمل فقط مع تسجيل الشاشة الكاملة.',
   window:
-    '🪟 <b>Window</b> — records just one app window; everything else is excluded even if it overlaps. ' +
-    'Note: cursor-follow zoom and click effects are off here (zooms stay centered), since the cursor can’t be mapped inside a movable window.<br>' +
-    '💡 Picking a browser records the whole window (the tab in front). To capture <b>one tab only</b>, drag it out into its own window first, then hit ↻ Refresh.',
+    '🪟 <b>نافذة</b> — تُسجّل نافذة تطبيق واحدة فقط؛ ويُستبعد كل ما عداها حتى لو تداخل معها. ' +
+    'ملاحظة: التكبير المتتبِّع للمؤشر وتأثيرات النقر مُعطَّلة هنا (يبقى التكبير في المنتصف)، لأنه يتعذّر تحديد موضع المؤشر داخل نافذة متحرّكة.<br>' +
+    '💡 اختيار متصفّح يُسجّل النافذة بأكملها (التبويب الظاهر). لالتقاط <b>تبويب واحد فقط</b>، اسحبه إلى نافذة مستقلة أولًا، ثم اضغط ↻ تحديث.',
 };
 
 // Show/hide the persistent "Screen Recording is off" banner. Returns true when
@@ -113,15 +113,15 @@ async function loadSources() {
     const opt = document.createElement('option');
     opt.value = '';
     opt.textContent = denied
-      ? 'Screen Recording permission needed — see banner above'
-      : `No ${currentKind === 'screen' ? 'screens' : 'open windows'} found — try ↻ Refresh`;
+      ? 'يلزم إذن تسجيل الشاشة — انظر الشريط أعلاه'
+      : `لم يُعثر على ${currentKind === 'screen' ? 'شاشات' : 'نوافذ مفتوحة'} — جرّب ↻ تحديث`;
     sourceSelect.appendChild(opt);
     selectedSource = null;
     recordBtn.disabled = true;
     stopScreenPreview();
     if (denied) {
       previewPlaceholder.textContent =
-        'Screen Recording is turned off for this app. Enable it in System Settings, then quit and reopen.';
+        'تسجيل الشاشة موقَّف لهذا التطبيق. فعّله من إعدادات النظام، ثم أغلق التطبيق وأعد فتحه.';
       previewPlaceholder.style.display = 'block';
     }
     return;
@@ -162,15 +162,15 @@ function updateAreaUI() {
   const enabled = canSelectArea();
   selectAreaBtn.disabled = !enabled;
   selectAreaBtn.title = enabled
-    ? 'Drag to record only part of the screen'
-    : 'Area selection is only available for full-screen sources';
+    ? 'اسحب لتسجيل جزء من الشاشة فقط'
+    : 'تحديد المنطقة متاح فقط لمصادر الشاشة الكاملة';
   if (selectedRegion && enabled) {
     regionChip.style.display = 'inline-flex';
     regionChipText.textContent = `${selectedRegion.w} × ${selectedRegion.h}`;
-    selectAreaBtn.textContent = '⬚ Change area…';
+    selectAreaBtn.textContent = '⬚ تغيير المنطقة…';
   } else {
     regionChip.style.display = 'none';
-    selectAreaBtn.textContent = '⬚ Select area…';
+    selectAreaBtn.textContent = '⬚ تحديد منطقة…';
   }
   updateRegionOutline();
 }
@@ -243,7 +243,7 @@ async function startScreenPreview(source) {
   } catch (err) {
     console.warn('Screen preview failed:', err.message);
     screenPreviewVideo.style.display = 'none';
-    previewPlaceholder.textContent = 'Preview unavailable: ' + err.message;
+    previewPlaceholder.textContent = 'المعاينة غير متاحة: ' + err.message;
     previewPlaceholder.style.display = 'block';
   }
 }
@@ -291,7 +291,7 @@ async function loadDevices() {
   mics.forEach((m, i) => {
     const opt = document.createElement('option');
     opt.value = m.deviceId;
-    opt.textContent = m.label || `Microphone ${i + 1}`;
+    opt.textContent = m.label || `ميكروفون ${i + 1}`;
     micSelect.appendChild(opt);
   });
   if (!mics.length) {
@@ -304,7 +304,7 @@ async function loadDevices() {
   cams.forEach((c, i) => {
     const opt = document.createElement('option');
     opt.value = c.deviceId;
-    opt.textContent = c.label || `Camera ${i + 1}`;
+    opt.textContent = c.label || `كاميرا ${i + 1}`;
     camSelect.appendChild(opt);
   });
   if (!cams.length) {
@@ -321,7 +321,7 @@ async function startCamPreview() {
   if (camEnabled.disabled) return;
   camPreviewBox.style.display = 'flex';
   camPreview.style.display = 'block'; // overlay on the preview stage
-  camStatus.textContent = 'Starting camera…';
+  camStatus.textContent = 'جارٍ تشغيل الكاميرا…';
   try {
     await camProcessor.start(camSelect.value);
     camPreviewOn = true;
@@ -329,11 +329,11 @@ async function startCamPreview() {
     if (!camProcessor.blurAvailable) {
       blurEnabled.disabled = true;
       blurEnabled.checked = false;
-      blurEnabled.parentElement.title = 'Background blur unavailable on this system';
-      camStatus.textContent = 'Blur unavailable';
+      blurEnabled.parentElement.title = 'تمويه الخلفية غير متاح على هذا النظام';
+      camStatus.textContent = 'التمويه غير متاح';
     }
   } catch (err) {
-    camStatus.textContent = 'Camera error: ' + err.message;
+    camStatus.textContent = 'خطأ في الكاميرا: ' + err.message;
     console.warn('Camera preview failed:', err);
   }
 }
@@ -370,7 +370,8 @@ blurAmount.addEventListener('input', () => {
 function resetRecordingUI() {
   isRecording = false;
   recBanner.classList.remove('active');
-  recordBtn.textContent = '● Start Recording';
+  recordBtn.style.display = '';
+  recordBtn.textContent = '● بدء التسجيل';
   recordBtn.disabled = !selectedSource;
   stopBtn.disabled = false;
   stopTimer();
@@ -438,7 +439,7 @@ async function startRecording() {
   // recording a black screen. (No-op / always ok on Windows.)
   const perm = await window.api.ensureScreenPermission();
   if (!perm.ok) {
-    topStatus.textContent = 'Enable Screen Recording in System Settings, then quit and reopen the app.';
+    topStatus.textContent = 'فعّل تسجيل الشاشة من إعدادات النظام، ثم أغلق التطبيق وأعد فتحه.';
     recordBtn.disabled = !selectedSource;
     return;
   }
@@ -458,7 +459,7 @@ async function startRecording() {
     // Stop the live preview so we don't capture the screen twice at once
     // (that can drop frames in the actual recording).
     await stopScreenPreview();
-    previewPlaceholder.textContent = '● Recording in progress…';
+    previewPlaceholder.textContent = '● جارٍ التسجيل…';
 
     // Capture the screen via the desktop source id.
     const fullStream = await navigator.mediaDevices.getUserMedia({
@@ -550,7 +551,8 @@ async function startRecording() {
     isRecording = true;
 
     recBanner.classList.add('active');
-    recordBtn.textContent = '● Recording…';
+    recordBtn.style.display = 'none'; // the live indicator + stop take over while recording
+    recordBtn.textContent = '● جارٍ التسجيل…';
     startTimer(recBaseEpoch);
   } catch (err) {
     // Capture failed or was cancelled — clean up so nothing is left running.
@@ -559,7 +561,7 @@ async function startRecording() {
     teardownStreams();
     mediaRecorder = null;
     camRecorder = null;
-    topStatus.textContent = 'Could not start recording: ' + (err.message || err);
+    topStatus.textContent = 'تعذّر بدء التسجيل: ' + (err.message || err);
     resetRecordingUI();
     if (selectedSource) startScreenPreview(selectedSource); // bring the preview back
   }
@@ -567,7 +569,7 @@ async function startRecording() {
 
 async function onRecordingStopped() {
   stopTimer();
-  topStatus.textContent = 'Saving recording…';
+  topStatus.textContent = 'جارٍ حفظ التسجيل…';
   try {
     if (recState.hasCam) await camStopped; // wait for the webcam recorder to flush
     await Promise.all(pendingWrites); // ensure every chunk reached disk
@@ -577,13 +579,13 @@ async function onRecordingStopped() {
 
     teardownStreams();
 
-    topStatus.textContent = 'Opening editor…';
+    topStatus.textContent = 'جارٍ فتح المحرر…';
     await window.api.openEditor();
   } catch (err) {
     console.error('Failed to save recording:', err);
     try { await window.api.abortRecording(); } catch (_) {}
     teardownStreams();
-    topStatus.textContent = 'Could not save recording: ' + (err.message || err);
+    topStatus.textContent = 'تعذّر حفظ التسجيل: ' + (err.message || err);
     resetRecordingUI();
     if (selectedSource) startScreenPreview(selectedSource);
   }
@@ -629,6 +631,23 @@ function stopTimer() {
 recordBtn.addEventListener('click', startRecording);
 stopBtn.addEventListener('click', stopRecording);
 
+// Keyboard-shortcuts reference modal.
+const shortcutsModal = document.getElementById('shortcutsModal');
+const shortcutsBtn = document.getElementById('shortcutsBtn');
+const closeShortcuts = document.getElementById('closeShortcuts');
+function toggleShortcuts(open) {
+  shortcutsModal.classList.toggle('open', open ?? !shortcutsModal.classList.contains('open'));
+}
+shortcutsBtn.addEventListener('click', () => toggleShortcuts());
+closeShortcuts.addEventListener('click', () => toggleShortcuts(false));
+shortcutsModal.addEventListener('click', (e) => { if (e.target === shortcutsModal) toggleShortcuts(false); });
+window.addEventListener('keydown', (e) => {
+  const el = document.activeElement;
+  const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
+  if (e.key === 'Escape') toggleShortcuts(false);
+  else if ((e.key === '?' || e.key === '؟') && !typing) toggleShortcuts(true);
+});
+
 // Global start/stop hotkey (fires even when the app isn't focused).
 if (window.api.onToggleRecord) {
   window.api.onToggleRecord(() => toggleRecord());
@@ -659,19 +678,19 @@ async function loadLibrary() {
   library.innerHTML = '';
 
   items.forEach((it) => {
-    const when = new Date(it.mtime).toLocaleString();
+    const when = new Date(it.mtime).toLocaleString('ar');
     const el = document.createElement('div');
     el.className = 'rec-item';
     el.innerHTML = `
       <div class="rec-info">
         <div class="rec-name">${it.name}</div>
-        <div class="rec-meta">${when} · ${it.sizeMB} MB</div>
+        <div class="rec-meta">${when} · ${it.sizeMB} م.ب</div>
       </div>
-      ${it.hasCam ? '<span class="badge">webcam</span>' : ''}
-      <button class="btn-ghost reveal">Show file</button>
-      <button class="btn-primary edit">Edit</button>`;
+      ${it.hasCam ? '<span class="badge">كاميرا</span>' : ''}
+      <button class="btn-ghost reveal">عرض الملف</button>
+      <button class="btn-primary edit">تعديل</button>`;
     el.querySelector('.edit').addEventListener('click', async () => {
-      topStatus.textContent = 'Opening editor…';
+      topStatus.textContent = 'جارٍ فتح المحرر…';
       await window.api.openRecording(it.videoPath);
     });
     el.querySelector('.reveal').addEventListener('click', () => window.api.revealFile(it.videoPath));

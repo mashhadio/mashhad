@@ -1,7 +1,8 @@
 {
-  "name": "smooth-screen-recorder",
+  "name": "mashhad",
+  "productName": "مشهد",
   "version": "0.1.0",
-  "description": "Cross-platform screen recorder with smooth cursor zoom and microphone noise filtering",
+  "description": "مشهد — مسجّل شاشة مع تكبير سلس يتتبّع المؤشر وتنقية لضوضاء الميكروفون",
   "main": "src/main/main.js",
   "author": "Abdul",
   "license": "MIT",
@@ -21,8 +22,8 @@
     "uiohook-napi": "^1.5.4"
   },
   "build": {
-    "appId": "com.abdul.smoothrecorder",
-    "productName": "Smooth Screen Recorder",
+    "appId": "com.abdul.mashhad",
+    "productName": "مشهد",
     "files": [
       "src/**/*",
       "assets/**/*",
@@ -44,13 +45,13 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "NSCameraUsageDescription": "Smooth Screen Recorder uses your camera for the optional webcam overlay.",
-        "NSMicrophoneUsageDescription": "Smooth Screen Recorder records your microphone for narration.",
-        "NSScreenCaptureUsageDescription": "Smooth Screen Recorder records your screen."
+        "NSCameraUsageDescription": "يستخدم «مشهد» الكاميرا لعرض الكاميرا الاختياري.",
+        "NSMicrophoneUsageDescription": "يسجّل «مشهد» الميكروفون للتعليق الصوتي.",
+        "NSScreenCaptureUsageDescription": "يسجّل «مشهد» شاشتك."
       }
     },
     "dmg": {
-      "title": "Smooth Screen Recorder"
+      "title": "مشهد"
     }
   }
 }

@@ -1,183 +1,204 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: file:; style-src 'self' 'unsafe-inline';" />
-  <title>Editor · Smooth Screen Recorder</title>
+        content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: file:; style-src 'self' 'unsafe-inline'; font-src 'self';" />
+  <title>المحرر · مشهد</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div class="app">
     <div class="topbar">
       <div class="dot"></div>
-      <h1>Editor</h1>
-      <button class="btn-ghost" id="backBtn" style="margin-left:10px">‹ New recording</button>
+      <h1>المحرر</h1>
+      <button class="btn-ghost" id="backBtn" style="margin-inline-start:10px">＋ تسجيل جديد</button>
       <div class="spacer"></div>
       <span class="status" id="topStatus"></span>
+      <button class="btn-ghost" id="shortcutsBtn" title="اختصارات لوحة المفاتيح">⌨ اختصارات</button>
     </div>
 
     <div class="content" id="content">
+      <div class="studio">
+        <div class="studio-main">
       <div class="editor-stage">
         <canvas id="preview"></canvas>
       </div>
 
       <div class="transport">
-        <button id="playBtn">▶ Play</button>
+        <button id="playBtn">▶ تشغيل</button>
         <span class="time-label" id="timeLabel">00:00 / 00:00</span>
         <div class="timeline" id="timeline">
           <div class="playhead" id="playhead"></div>
         </div>
       </div>
 
+      <p class="hint compact" id="zoomHint">
+        <b>S</b> لتقسيم المقطع · اسحب المقاطع لإعادة ترتيبها · <b>Delete</b> لحذف المحدّد · <b>Ctrl+Z</b> للتراجع.
+        اسحب كتل التكبير لتحريكها وحوافها لتغيير حجمها.
+      </p>
+        </div>
+
+        <aside class="inspector">
+      <!-- 1 · المقاطع -->
       <div class="editor-controls">
+        <span class="panel-title">المقاطع</span>
         <div class="group">
-          <button class="btn-primary" id="autoZoomBtn">✨ Auto zoom on clicks</button>
-          <button id="addZoomBtn">＋ Zoom here</button>
-          <button id="clearZoomBtn">Clear zooms</button>
-        </div>
-        <div class="sep"></div>
-        <div class="group">
-          <button id="splitBtn" title="Split the clip at the playhead (S)">✂ Split</button>
-          <button id="undoBtn" disabled title="Undo last clip edit (Ctrl+Z)">↩ Undo</button>
-          <div class="slider">
-            <span>Transition</span>
-            <select id="clipTransition" disabled title="Select a clip first">
-              <option value="none">None (cut)</option>
-              <option value="fade">Fade</option>
-              <option value="crossfade">Crossfade</option>
-              <option value="slide">Slide</option>
-              <option value="wipe">Wipe</option>
-              <option value="zoom">Zoom</option>
-            </select>
-          </div>
+          <button id="splitBtn" title="قسّم المقطع عند المؤشر (S)">✂ تقسيم</button>
+          <button id="undoBtn" disabled title="تراجع عن آخر تعديل (Ctrl+Z)">↩ تراجع</button>
         </div>
         <div class="sep"></div>
         <div class="group">
           <div class="slider">
-            <span id="zoomLevelLabel">Zoom level: <b id="zoomLevelVal">2.0×</b></span>
-            <input type="range" id="zoomLevel" min="1.2" max="4" step="0.1" value="2.0" />
-          </div>
-          <div class="slider">
-            <span>Smoothness: <b id="smoothVal">0.55s</b></span>
-            <input type="range" id="smoothRamp" min="0.2" max="1.2" step="0.05" value="0.55" />
-          </div>
-        </div>
-        <div class="sep"></div>
-        <div class="group">
-          <div class="slider">
-            <span>Mic cleanup <span class="status" id="audioStatus" style="font-size:11px"></span></span>
-            <select id="noiseProfile">
-              <option value="off">Off</option>
-              <option value="light">Light</option>
-              <option value="medium" selected>Medium</option>
-              <option value="strong">Strong</option>
+            <span>الانتقال</span>
+            <select id="clipTransition" disabled title="اختر مقطعًا أولًا">
+              <option value="none">بدون (قطع)</option>
+              <option value="fade">تلاشٍ</option>
+              <option value="crossfade">تلاشٍ متقاطع</option>
+              <option value="slide">انزلاق</option>
+              <option value="wipe">مسح</option>
+              <option value="zoom">تكبير</option>
             </select>
           </div>
         </div>
       </div>
 
+      <!-- 2 · التكبير -->
       <div class="editor-controls">
+        <span class="panel-title">التكبير</span>
         <div class="group">
-          <label class="switch"><input type="checkbox" id="clickFx" checked /> Click highlight</label>
-          <div class="slider">
-            <span>Style</span>
-            <select id="clickStyle">
-              <option value="ring" selected>Ring</option>
-              <option value="pulse">Solid pulse</option>
-              <option value="double">Double ring</option>
-              <option value="spotlight">Spotlight</option>
-            </select>
-          </div>
-          <div class="slider">
-            <span>Color</span>
-            <input type="color" id="clickColor" value="#ffcd3c" />
-          </div>
-          <div class="slider">
-            <span>Size: <b id="clickSizeVal">5%</b></span>
-            <input type="range" id="clickSize" min="2" max="12" step="1" value="5" />
-          </div>
-          <button id="testFxBtn" title="Jump to a click and preview the effect">▶ Test effect</button>
+          <button class="btn-primary" id="autoZoomBtn">✨ تكبير تلقائي عند النقر</button>
+          <button id="addZoomBtn">＋ تكبير هنا</button>
+          <button id="clearZoomBtn">مسح التكبيرات</button>
         </div>
         <div class="sep"></div>
         <div class="group">
-          <label class="switch"><input type="checkbox" id="clickSound" /> Click sound</label>
           <div class="slider">
-            <span>Sound</span>
-            <select id="clickSoundName">
-              <option value="mouse" selected>Mouse click</option>
-              <option value="mouse_soft">Mouse click (soft)</option>
+            <span id="zoomLevelLabel">مستوى التكبير: <b id="zoomLevelVal">2.0×</b></span>
+            <input type="range" id="zoomLevel" min="1.2" max="4" step="0.1" value="2.0" />
+          </div>
+          <div class="slider">
+            <span>النعومة: <b id="smoothVal">0.55ث</b></span>
+            <input type="range" id="smoothRamp" min="0.2" max="1.2" step="0.05" value="0.55" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 3 · تأثيرات النقر -->
+      <div class="editor-controls">
+        <span class="panel-title">تأثيرات النقر</span>
+        <div class="group">
+          <label class="switch"><input type="checkbox" id="clickFx" checked /> إبراز النقر</label>
+          <div class="slider">
+            <span>النمط</span>
+            <select id="clickStyle">
+              <option value="ring" selected>حلقة</option>
+              <option value="pulse">نبضة صلبة</option>
+              <option value="double">حلقة مزدوجة</option>
+              <option value="spotlight">بقعة ضوء</option>
             </select>
           </div>
           <div class="slider">
-            <span>Volume: <b id="clickVolVal">70%</b></span>
+            <span>اللون</span>
+            <input type="color" id="clickColor" value="#ffcd3c" />
+          </div>
+          <div class="slider">
+            <span>الحجم: <b id="clickSizeVal">5%</b></span>
+            <input type="range" id="clickSize" min="2" max="12" step="1" value="5" />
+          </div>
+          <button id="testFxBtn" title="انتقل إلى نقرة وعاين التأثير">▶ اختبار التأثير</button>
+        </div>
+        <div class="sep"></div>
+        <div class="group">
+          <label class="switch"><input type="checkbox" id="clickSound" /> صوت النقر</label>
+          <div class="slider">
+            <span>الصوت</span>
+            <select id="clickSoundName">
+              <option value="mouse" selected>نقرة الفأرة</option>
+              <option value="mouse_soft">نقرة الفأرة (ناعمة)</option>
+            </select>
+          </div>
+          <div class="slider">
+            <span>مستوى الصوت: <b id="clickVolVal">70%</b></span>
             <input type="range" id="clickVol" min="0" max="100" step="5" value="70" />
           </div>
         </div>
       </div>
 
+      <!-- 4 · الكاميرا -->
       <div class="editor-controls" id="camControls" style="display:none">
+        <span class="panel-title">الكاميرا</span>
         <div class="group">
-          <label class="switch"><input type="checkbox" id="camShow" checked /> Show webcam</label>
+          <label class="switch"><input type="checkbox" id="camShow" checked /> إظهار الكاميرا</label>
         </div>
         <div class="sep"></div>
         <div class="group">
           <div class="slider">
-            <span>Position (or drag on video)</span>
+            <span>الموضع (أو اسحب على الفيديو)</span>
             <select id="camPos">
-              <option value="br" selected>Bottom-right</option>
-              <option value="bl">Bottom-left</option>
-              <option value="tr">Top-right</option>
-              <option value="tl">Top-left</option>
+              <option value="br" selected>أسفل اليمين</option>
+              <option value="bl">أسفل اليسار</option>
+              <option value="tr">أعلى اليمين</option>
+              <option value="tl">أعلى اليسار</option>
             </select>
           </div>
           <div class="slider">
-            <span>Shape</span>
+            <span>الشكل</span>
             <select id="camShape">
-              <option value="circle" selected>Circle</option>
-              <option value="rounded">Rounded</option>
+              <option value="circle" selected>دائري</option>
+              <option value="rounded">مستدير</option>
             </select>
           </div>
           <div class="slider">
-            <span>Size: <b id="camSizeVal">24%</b></span>
+            <span>الحجم: <b id="camSizeVal">24%</b></span>
             <input type="range" id="camSize" min="12" max="40" step="1" value="24" />
           </div>
         </div>
       </div>
 
-      <p class="hint" id="zoomHint">
-        Tip: click a zoom block on the timeline to select it, drag its middle to move it, drag its
-        edges to resize, and use <b>Zoom level</b> to change just that block. Double-click a block to delete it.
-        Use <b>✂ Split</b> (or press <b>S</b>) to cut at the playhead, <b>drag clips</b> to reorder them, and
-        select a clip then press <b>Delete</b> (✕) to remove it. Pick a <b>Transition</b> for the selected clip to
-        set how it enters from the previous one (it follows the clip when you reorder). <b>Ctrl+Z</b> undoes clip edits.
-      </p>
-
+      <!-- 5 · الصوت -->
       <div class="editor-controls">
+        <span class="panel-title">الصوت</span>
         <div class="group">
           <div class="slider">
-            <span>Format</span>
+            <span>تنقية الميكروفون <span class="status" id="audioStatus" style="font-size:11px"></span></span>
+            <select id="noiseProfile">
+              <option value="off">إيقاف</option>
+              <option value="light">خفيفة</option>
+              <option value="medium" selected>متوسطة</option>
+              <option value="strong">قوية</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6 · التصدير -->
+      <div class="editor-controls export-section">
+        <span class="panel-title">التصدير</span>
+        <div class="group">
+          <div class="slider">
+            <span>الصيغة</span>
             <select id="exportFormat">
-              <option value="youtube" selected>YouTube (optimized MP4)</option>
-              <option value="master">Editing master (high bitrate)</option>
+              <option value="youtube" selected>يوتيوب (MP4 مُحسّن)</option>
+              <option value="master">نسخة تعديل رئيسية (معدل بِت عالٍ)</option>
               <option value="mp4">MP4 (H.264)</option>
               <option value="webm">WebM (VP9)</option>
               <option value="mov">MOV (H.264)</option>
-              <option value="gif">Animated GIF</option>
+              <option value="gif">GIF متحرك</option>
             </select>
           </div>
           <div class="slider">
-            <span>Quality</span>
+            <span>الجودة</span>
             <select id="exportQuality">
-              <option value="high">High</option>
-              <option value="balanced" selected>Balanced</option>
-              <option value="small">Small file</option>
+              <option value="high">عالية</option>
+              <option value="balanced" selected>متوازنة</option>
+              <option value="small">ملف صغير</option>
             </select>
           </div>
           <div class="slider">
-            <span>Resolution</span>
+            <span>الدقة</span>
             <select id="exportResolution">
-              <option value="original" selected>Original</option>
+              <option value="original" selected>الأصلية</option>
               <option value="1440">1440p</option>
               <option value="1080">1080p</option>
               <option value="720">720p</option>
@@ -185,13 +206,29 @@
             </select>
           </div>
         </div>
+        <div class="export-bar">
+          <button class="btn-primary" id="exportBtn">⬇ تصدير</button>
+          <div class="progress" id="progress"><div id="progressFill"></div></div>
+          <span class="status" id="exportStatus"></span>
+        </div>
       </div>
+        </aside>
+      </div>
+    </div>
+  </div>
 
-      <div class="export-bar">
-        <button class="btn-primary" id="exportBtn">⬇ Export</button>
-        <div class="progress" id="progress"><div id="progressFill"></div></div>
-        <span class="status" id="exportStatus"></span>
+  <div class="modal-backdrop" id="shortcutsModal">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>اختصارات لوحة المفاتيح</h3>
+        <button class="modal-x" id="closeShortcuts" aria-label="إغلاق">✕</button>
       </div>
+      <div class="shortcut-row"><span>تشغيل / إيقاف مؤقت</span><span class="keys"><kbd>مسافة</kbd></span></div>
+      <div class="shortcut-row"><span>إرجاع / تقديم ثانية</span><span class="keys"><kbd>←</kbd><kbd>→</kbd></span></div>
+      <div class="shortcut-row"><span>تقسيم المقطع عند المؤشر</span><span class="keys"><kbd>S</kbd></span></div>
+      <div class="shortcut-row"><span>حذف المقطع أو التكبير المحدّد</span><span class="keys"><kbd>Delete</kbd></span></div>
+      <div class="shortcut-row"><span>تراجع عن آخر تعديل</span><span class="keys"><kbd>Ctrl</kbd><kbd>Z</kbd></span></div>
+      <div class="shortcut-row"><span>عرض هذه القائمة</span><span class="keys"><kbd>?</kbd></span></div>
     </div>
   </div>
 

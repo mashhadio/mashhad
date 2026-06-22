@@ -94,7 +94,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 640,
     backgroundColor: '#0e0f13',
-    title: 'Smooth Screen Recorder',
+    title: 'مشهد',
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,
@@ -208,16 +208,16 @@ ipcMain.handle('screen:ensure', async () => {
   const appName = app.getName();
   const isDev = !app.isPackaged;
   const detail = isDev
-    ? `Open System Settings → Privacy & Security → Screen Recording and enable “Electron”, then quit and reopen the app.\n\n(In development the running binary is Electron, so the entry is named “Electron”, not “${appName}”.)`
-    : `Open System Settings → Privacy & Security → Screen Recording and enable “${appName}”, then quit and reopen the app.`;
+    ? `افتح إعدادات النظام ← الخصوصية والأمان ← تسجيل الشاشة وفعّل «Electron»، ثم أغلق التطبيق وأعد فتحه.\n\n(أثناء التطوير يكون البرنامج العامل هو Electron، لذا يظهر الإدخال باسم «Electron» وليس «${appName}».)`
+    : `افتح إعدادات النظام ← الخصوصية والأمان ← تسجيل الشاشة وفعّل «${appName}»، ثم أغلق التطبيق وأعد فتحه.`;
 
   const { response } = await dialog.showMessageBox(mainWindow, {
     type: 'warning',
-    buttons: ['Open System Settings', 'Cancel'],
+    buttons: ['فتح إعدادات النظام', 'إلغاء'],
     defaultId: 0,
     cancelId: 1,
-    title: 'Screen Recording permission needed',
-    message: 'This app isn’t allowed to record your screen yet.',
+    title: 'يلزم إذن تسجيل الشاشة',
+    message: 'هذا التطبيق غير مسموح له بتسجيل شاشتك بعد.',
     detail,
   });
   if (response === 0) {
@@ -327,7 +327,7 @@ ipcMain.handle('rec:finish', async (_evt, { hasAudio }) => {
   const cursorLog = stopCursorTracking();
   const s = recSession;
   recSession = null;
-  if (!s) throw new Error('No active recording');
+  if (!s) throw new Error('لا يوجد تسجيل نشط');
 
   await endStream(s.videoStream);
   await endStream(s.camStream);
@@ -456,24 +456,24 @@ function pathToFileUrl(p) {
 // IPC: export
 // ---------------------------------------------------------------------------
 ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
-  if (!currentProject) throw new Error('No project loaded');
+  if (!currentProject) throw new Error('لم يُحمَّل أي مشروع');
 
   const tmpZoomed = path.join(os.tmpdir(), `ssr-zoomed-${Date.now()}.webm`);
   fs.writeFileSync(tmpZoomed, Buffer.from(zoomedBuffer));
 
   const format = options.format || 'mp4';
   const FILTERS = {
-    youtube: { name: 'MP4 Video (YouTube)', extensions: ['mp4'] },
-    master: { name: 'MP4 Video (Editing master)', extensions: ['mp4'] },
-    mp4: { name: 'MP4 Video', extensions: ['mp4'] },
-    mov: { name: 'QuickTime Video', extensions: ['mov'] },
-    webm: { name: 'WebM Video', extensions: ['webm'] },
-    gif: { name: 'Animated GIF', extensions: ['gif'] },
+    youtube: { name: 'فيديو MP4 (يوتيوب)', extensions: ['mp4'] },
+    master: { name: 'فيديو MP4 (نسخة تعديل رئيسية)', extensions: ['mp4'] },
+    mp4: { name: 'فيديو MP4', extensions: ['mp4'] },
+    mov: { name: 'فيديو QuickTime', extensions: ['mov'] },
+    webm: { name: 'فيديو WebM', extensions: ['webm'] },
+    gif: { name: 'GIF متحرك', extensions: ['gif'] },
   };
   const filter = FILTERS[format] || FILTERS.mp4;
   const defaultName = path.basename(currentProject.videoPath).replace(/\.webm$/, `.${filter.extensions[0]}`);
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
-    title: 'Export video',
+    title: 'تصدير الفيديو',
     defaultPath: path.join(RECORDINGS_DIR, defaultName),
     filters: [filter],
   });

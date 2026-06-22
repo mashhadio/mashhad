@@ -1,3 +1,35 @@
+/* Thmanyah brand fonts (bundled in assets/fonts). */
+@font-face {
+  font-family: "Thmanyah Sans";
+  src: url("../../assets/fonts/thmanyahsans-Regular.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah Sans";
+  src: url("../../assets/fonts/thmanyahsans-Medium.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah Sans";
+  src: url("../../assets/fonts/thmanyahsans-Bold.woff2") format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah Sans";
+  src: url("../../assets/fonts/thmanyahsans-Black.woff2") format("woff2");
+  font-weight: 900; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah Serif Display";
+  src: url("../../assets/fonts/thmanyahserifdisplay-Bold.woff2") format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Thmanyah Serif Display";
+  src: url("../../assets/fonts/thmanyahserifdisplay-Black.woff2") format("woff2");
+  font-weight: 900; font-style: normal; font-display: swap;
+}
+
 :root {
   --bg: #0e0f13;
   --panel: #171922;
@@ -18,10 +50,18 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-family: "Thmanyah Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
   -webkit-user-select: none;
   user-select: none;
 }
+
+/* Brand wordmark / headings use the display serif. */
+h1 { font-family: "Thmanyah Serif Display", "Thmanyah Sans", serif; }
+
+/* The video editing transport (play · time · timeline) stays left-to-right even
+   in the RTL Arabic UI — a media timeline reads left→right universally, and the
+   playhead/clip math is computed from physical `left`. */
+.transport { direction: ltr; }
 
 button {
   font-family: inherit;
@@ -99,7 +139,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 #selectAreaBtn:disabled { opacity: 0.45; cursor: default; }
 .region-chip {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 5px 6px 5px 11px;
+  padding-block: 5px; padding-inline: 11px 6px;
   border-radius: 999px;
   background: rgba(77, 163, 255, 0.14);
   border: 1px solid rgba(77, 163, 255, 0.45);
@@ -200,25 +240,53 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent);
 .perm-text strong { color: var(--text); }
 .perm-text span { color: var(--muted); font-size: 13px; }
 
+/* Live recording indicator — a compact pill pinned in the topbar. */
 .recording-banner {
-  display: none;
-  align-items: center;
-  gap: 14px;
-  background: linear-gradient(90deg, rgba(255,85,99,0.16), transparent);
+  display: none; align-items: center; gap: 10px;
+  background: rgba(255,85,99,0.14);
   border: 1px solid rgba(255,85,99,0.4);
-  border-radius: 12px;
-  padding: 14px 18px;
-  margin-bottom: 18px;
+  border-radius: 10px; padding-block: 5px; padding-inline: 12px 6px;
 }
-.recording-banner.active { display: flex; }
+.recording-banner.active { display: inline-flex; }
+.recording-banner .btn-danger { padding: 6px 12px; font-size: 13px; }
 .rec-dot {
-  width: 14px; height: 14px; border-radius: 50%; background: var(--danger);
-  animation: pulse 1s infinite;
+  width: 12px; height: 12px; border-radius: 50%; background: var(--danger);
+  animation: pulse 1s infinite; flex: none;
 }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
-.timer { font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 700; }
+.timer { font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 700; }
+
+/* Keyboard keys + shortcuts modal. */
+kbd {
+  display: inline-block; font-family: inherit; font-size: 11px; font-weight: 700;
+  line-height: 1.4; min-width: 16px; text-align: center;
+  padding: 2px 7px; border-radius: 6px; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--border); border-bottom-width: 2px;
+}
+.hotkey-chip { display: inline-flex; align-items: center; }
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.55);
+  display: none; align-items: center; justify-content: center;
+}
+.modal-backdrop.open { display: flex; }
+.modal {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 14px; padding: 18px 20px; min-width: 320px; max-width: 460px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+.modal-head h3 { margin: 0; font-size: 15px; }
+.modal-x { background: transparent; padding: 4px 9px; font-size: 13px; color: var(--muted); }
+.modal-x:hover { background: var(--panel-2); }
+.shortcut-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 8px 0; font-size: 13px; border-top: 1px solid var(--border);
+}
+.shortcut-row .keys { display: inline-flex; gap: 4px; }
 
 .hint { color: var(--muted); font-size: 13px; margin-top: 10px; line-height: 1.5; }
+.hint.compact { font-size: 12px; opacity: 0.8; margin: 10px 2px 2px; }
+.hint.compact b { color: var(--text); font-weight: 700; }
 
 /* ---- Editor ---- */
 .editor-stage {
@@ -331,12 +399,44 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent);
 }
 .time-label { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--muted); min-width: 96px; }
 
+/* ---- Studio editor: preview/timeline in the main area, controls in a side inspector ---- */
+#content { display: flex; overflow: hidden; }
+.studio { display: flex; flex: 1; gap: 18px; min-height: 0; }
+.studio-main {
+  flex: 1 1 auto; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; gap: 14px; overflow: auto;
+}
+.studio-main .transport { margin-top: 0; }
+.studio-main .editor-stage canvas { max-height: 60vh; }
+.inspector {
+  flex: 0 0 340px; min-height: 0; align-self: stretch;
+  overflow-y: auto; overflow-x: hidden;
+  display: flex; flex-direction: column; gap: 12px; padding-bottom: 4px;
+}
+/* In the narrow inspector, sections stack vertically and fill the width. */
+.inspector .editor-controls {
+  margin-top: 0; flex-direction: column; align-items: stretch; gap: 12px;
+}
+.inspector .editor-controls .sep { display: none; }
+.inspector .editor-controls .group { width: 100%; flex-wrap: wrap; }
+.inspector .slider { width: 100%; }
+.inspector .slider input[type="range"] { width: 100%; }
+.inspector .export-section .export-bar { margin-top: 12px; }
+
 .editor-controls {
-  display: flex; align-items: center; gap: 14px; margin-top: 18px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 14px; margin-top: 12px; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
+}
+/* Section header that sits above a panel's controls (forces them to wrap below). */
+.panel-title {
+  flex-basis: 100%; margin: 0 0 2px;
+  font-size: 11px; font-weight: 700; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--muted);
 }
 .editor-controls .group { display: flex; align-items: center; gap: 8px; }
 .editor-controls .sep { width: 1px; height: 28px; background: var(--border); }
+/* Export action spans the full width under its settings. */
+.export-section .export-bar { flex-basis: 100%; margin-top: 12px; }
 .slider { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 input[type="range"] { width: 140px; accent-color: var(--accent); }
 
