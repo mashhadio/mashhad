@@ -24,19 +24,17 @@ async function loadTtf(woff2Name) {
 
 async function main() {
   const black = await loadTtf('thmanyahsans-Black.woff2');
-  const medium = await loadTtf('thmanyahsans-Medium.woff2');
-  console.log('Families:', black.family, '/', medium.family);
+  console.log('Family:', black.family);
 
   const base = fs.readFileSync(path.join(BUILD, 'logo.svg'), 'utf8')
-    .replaceAll('__SANS_BLACK__', black.family)
-    .replaceAll('__SANS_MED__', medium.family);
+    .replaceAll('__SANS_BLACK__', black.family);
 
-  const fontBuffers = [black.buffer, medium.buffer];
+  const fontBuffers = [black.buffer];
 
   function render(svg, outName) {
     const r = new Resvg(svg, {
-      fitTo: { mode: 'width', value: 1640 },
-      font: { fontBuffers, loadSystemFonts: false, defaultFontFamily: medium.family },
+      fitTo: { mode: 'width', value: 1480 },
+      font: { fontBuffers, loadSystemFonts: false, defaultFontFamily: black.family },
     });
     fs.writeFileSync(path.join(BUILD, outName), r.render().asPng());
     console.log('Wrote build/' + outName);
