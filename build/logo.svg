@@ -1,0 +1,31 @@
+<svg width="760" height="620" viewBox="0 0 760 620" xmlns="http://www.w3.org/2000/svg">
+  <!-- Symbol badge -->
+  <g transform="translate(250,40) scale(0.2539)">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#11271F"/>
+        <stop offset="0.55" stop-color="#0C1118"/>
+        <stop offset="1" stop-color="#090B10"/>
+      </linearGradient>
+    </defs>
+    <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
+    <rect x="6" y="6" width="1012" height="1012" rx="226" fill="none" stroke="#2A3242" stroke-width="3"/>
+    <g fill="none" stroke="#22D3EE" stroke-width="38" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M404 296 L300 296 L300 400"/>
+      <path d="M620 296 L724 296 L724 400"/>
+      <path d="M404 728 L300 728 L300 624"/>
+      <path d="M620 728 L724 728 L724 624"/>
+    </g>
+    <path d="M452 410 L452 614 C452 632 471 643 487 634 L640 530 C656 519 656 505 640 494 L487 390 C471 381 452 392 452 410 Z" fill="#10B981"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="380" y="470" text-anchor="middle" direction="rtl"
+        font-family="Thmanyah Serif Display, serif" font-size="172" font-weight="700"
+        fill="#F8FAFC">مشهد</text>
+
+  <!-- Tagline -->
+  <text x="380" y="545" text-anchor="middle" direction="rtl"
+        font-family="Thmanyah Sans, sans-serif" font-size="30" font-weight="500"
+        fill="#94A3B8">كل فكرة تستحق مشهداً أفضل</text>
+</svg>

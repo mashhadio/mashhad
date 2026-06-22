@@ -12,13 +12,16 @@
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
     "dist:linux": "electron-builder --linux",
-    "icons": "node scripts/make-icons.js"
+    "icons": "node scripts/make-icons.js",
+    "logo": "node scripts/make-logo.js"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "electron": "^31.7.7",
     "electron-builder": "^24.13.3",
-    "png-to-ico": "^3.0.1"
+    "fontkit": "^2.0.4",
+    "png-to-ico": "^3.0.1",
+    "wawoff2": "^2.0.1"
   },
   "dependencies": {
     "@mediapipe/selfie_segmentation": "^0.1.1675465747",
