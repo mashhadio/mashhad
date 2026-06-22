@@ -5,10 +5,18 @@
       <stop offset="0.6" stop-color="#0C1018"/>
       <stop offset="1" stop-color="#090B10"/>
     </linearGradient>
-    <linearGradient id="grad" x1="250" y1="250" x2="774" y2="774" gradientUnits="userSpaceOnUse">
+    <linearGradient id="frame" x1="250" y1="250" x2="774" y2="774" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#2DD4E0"/>
       <stop offset="0.5" stop-color="#56A8F0"/>
       <stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="play" x1="400" y1="380" x2="620" y2="640" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DD4E0"/>
+      <stop offset="1" stop-color="#4E9BEF"/>
+    </linearGradient>
+    <linearGradient id="blade" x1="520" y1="340" x2="760" y2="600" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6E86F0"/>
+      <stop offset="1" stop-color="#9B6CF8"/>
     </linearGradient>
     <radialGradient id="rec" cx="0.5" cy="0.5" r="0.5">
       <stop offset="0" stop-color="#FB6B6B"/>
@@ -19,19 +27,22 @@
   <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
   <rect x="6" y="6" width="1012" height="1012" rx="226" fill="none" stroke="#2A3242" stroke-width="3"/>
 
-  <!-- Focus reticle (gradient) -->
-  <g fill="none" stroke="url(#grad)" stroke-width="46" stroke-linecap="round">
+  <!-- Focus reticle -->
+  <g fill="none" stroke="url(#frame)" stroke-width="46" stroke-linecap="round">
     <path d="M398 268 L320 268 A52 52 0 0 0 268 320 L268 398"/>
     <path d="M626 268 L704 268 A52 52 0 0 1 756 320 L756 398"/>
     <path d="M398 756 L320 756 A52 52 0 0 1 268 704 L268 626"/>
     <path d="M626 756 L704 756 A52 52 0 0 0 756 704 L756 626"/>
   </g>
 
-  <!-- Play / film mark -->
-  <path d="M430 388 L430 636 L648 512 Z" fill="url(#grad)" stroke="url(#grad)" stroke-width="30" stroke-linejoin="round" stroke-linecap="round"/>
-  <path d="M612 432 L722 512 L612 592" fill="none" stroke="#8B5CF6" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Blade (behind) -->
+  <path d="M516 356 L516 566 L752 470 Z" fill="url(#blade)"
+        stroke="url(#blade)" stroke-width="26" stroke-linejoin="round" stroke-linecap="round"/>
+  <!-- Play (front) -->
+  <path d="M414 388 L414 636 L612 512 Z" fill="url(#play)"
+        stroke="url(#play)" stroke-width="26" stroke-linejoin="round" stroke-linecap="round"/>
 
   <!-- Recording dot -->
-  <circle cx="712" cy="300" r="46" fill="#EF4444" opacity="0.22"/>
-  <circle cx="712" cy="300" r="30" fill="url(#rec)"/>
+  <circle cx="690" cy="300" r="44" fill="#EF4444" opacity="0.20"/>
+  <circle cx="690" cy="300" r="29" fill="url(#rec)"/>
 </svg>
