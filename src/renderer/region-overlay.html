@@ -24,8 +24,8 @@
     #sel {
       position: fixed;
       display: none;
-      border: 1.5px solid #4da3ff;
-      background: rgba(77, 163, 255, 0.08);
+      border: 1.5px solid #22d3ee;
+      background: rgba(34, 211, 238, 0.08);
       box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.42);
     }
     /* Live width × height readout that follows the selection. */
@@ -33,10 +33,10 @@
       position: fixed;
       display: none;
       padding: 3px 8px;
-      border-radius: 6px;
-      background: #4da3ff;
-      color: #06223f;
-      font-weight: 600;
+      border-radius: 8px;
+      background: #22d3ee;
+      color: #04222a;
+      font-weight: 700;
       font-variant-numeric: tabular-nums;
       white-space: nowrap;
       pointer-events: none;
@@ -47,21 +47,21 @@
       display: none;
       gap: 8px;
       padding: 8px;
-      border-radius: 10px;
-      background: #111418;
-      border: 1px solid #2a2f37;
-      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+      border-radius: 16px;
+      background: #161a23;
+      border: 1px solid #2a3242;
+      box-shadow: 0 16px 50px rgba(0, 0, 0, 0.5);
     }
     #toolbar button {
-      border: 0; border-radius: 7px;
-      padding: 7px 14px;
+      border: 0; border-radius: 12px;
+      padding: 8px 16px;
       font-size: 13px; font-weight: 600;
       color: #fff; cursor: pointer;
     }
-    #recordBtn { background: #e5484d; }
-    #recordBtn:hover { background: #f2585d; }
-    #cancelBtn { background: transparent; border: 1px solid #2a2f37; }
-    #cancelBtn:hover { background: #1b1f25; }
+    #recordBtn { background: #ef4444; }
+    #recordBtn:hover { background: #f15a5a; }
+    #cancelBtn { background: transparent; border: 1px solid #2a3242; }
+    #cancelBtn:hover { background: #1d2430; }
     /* Centered hint shown before any drag. */
     #hint {
       position: fixed;
@@ -69,12 +69,12 @@
       transform: translateX(-50%);
       padding: 9px 16px;
       border-radius: 999px;
-      background: rgba(17, 20, 24, 0.92);
-      color: #e8eaed;
-      border: 1px solid #2a2f37;
+      background: rgba(22, 26, 35, 0.92);
+      color: #f8fafc;
+      border: 1px solid #2a3242;
       pointer-events: none;
     }
-    #hint b { color: #4da3ff; }
+    #hint b { color: #22d3ee; }
   </style>
 </head>
 <body>
