@@ -1,31 +1,48 @@
-<svg width="760" height="620" viewBox="0 0 760 620" xmlns="http://www.w3.org/2000/svg">
-  <!-- Symbol badge -->
-  <g transform="translate(250,40) scale(0.2539)">
+<svg width="820" height="640" viewBox="0 0 820 640" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="textgrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2DD4E0"/>
+      <stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Symbol -->
+  <g transform="translate(232,24) scale(0.348)">
     <defs>
-      <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stop-color="#11271F"/>
-        <stop offset="0.55" stop-color="#0C1118"/>
-        <stop offset="1" stop-color="#090B10"/>
+      <linearGradient id="grad" x1="250" y1="250" x2="774" y2="774" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#2DD4E0"/>
+        <stop offset="0.5" stop-color="#56A8F0"/>
+        <stop offset="1" stop-color="#8B5CF6"/>
       </linearGradient>
+      <radialGradient id="rec" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0" stop-color="#FB6B6B"/>
+        <stop offset="1" stop-color="#EF4444"/>
+      </radialGradient>
     </defs>
-    <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
-    <rect x="6" y="6" width="1012" height="1012" rx="226" fill="none" stroke="#2A3242" stroke-width="3"/>
-    <g fill="none" stroke="#22D3EE" stroke-width="38" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M404 296 L300 296 L300 400"/>
-      <path d="M620 296 L724 296 L724 400"/>
-      <path d="M404 728 L300 728 L300 624"/>
-      <path d="M620 728 L724 728 L724 624"/>
+    <g fill="none" stroke="url(#grad)" stroke-width="46" stroke-linecap="round">
+      <path d="M398 268 L320 268 A52 52 0 0 0 268 320 L268 398"/>
+      <path d="M626 268 L704 268 A52 52 0 0 1 756 320 L756 398"/>
+      <path d="M398 756 L320 756 A52 52 0 0 1 268 704 L268 626"/>
+      <path d="M626 756 L704 756 A52 52 0 0 0 756 704 L756 626"/>
     </g>
-    <path d="M452 410 L452 614 C452 632 471 643 487 634 L640 530 C656 519 656 505 640 494 L487 390 C471 381 452 392 452 410 Z" fill="#10B981"/>
+    <path d="M430 388 L430 636 L648 512 Z" fill="url(#grad)" stroke="url(#grad)" stroke-width="30" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="M612 432 L722 512 L612 592" fill="none" stroke="#8B5CF6" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="712" cy="300" r="46" fill="#EF4444" opacity="0.22"/>
+    <circle cx="712" cy="300" r="30" fill="url(#rec)"/>
   </g>
 
   <!-- Wordmark -->
-  <text x="380" y="470" text-anchor="middle" direction="rtl"
-        font-family="Thmanyah Serif Display, serif" font-size="172" font-weight="700"
+  <text x="410" y="430" text-anchor="middle" direction="rtl"
+        font-family="__SANS_BLACK__" font-size="150" font-weight="900"
         fill="#F8FAFC">مشهد</text>
 
+  <!-- Latin wordmark -->
+  <text x="410" y="500" text-anchor="middle"
+        font-family="__SANS_MED__" font-size="40" font-weight="500"
+        letter-spacing="14" fill="url(#textgrad)">MASHHAD</text>
+
   <!-- Tagline -->
-  <text x="380" y="545" text-anchor="middle" direction="rtl"
-        font-family="Thmanyah Sans, sans-serif" font-size="30" font-weight="500"
+  <text x="410" y="560" text-anchor="middle" direction="rtl"
+        font-family="__SANS_MED__" font-size="27" font-weight="500"
         fill="#94A3B8">كل فكرة تستحق مشهداً أفضل</text>
 </svg>

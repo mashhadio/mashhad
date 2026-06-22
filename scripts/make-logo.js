@@ -23,20 +23,20 @@ async function loadTtf(woff2Name) {
 }
 
 async function main() {
-  const serif = await loadTtf('thmanyahserifdisplay-Bold.woff2');
-  const sans = await loadTtf('thmanyahsans-Medium.woff2');
-  console.log('Detected families:', serif.family, '/', sans.family);
+  const black = await loadTtf('thmanyahsans-Black.woff2');
+  const medium = await loadTtf('thmanyahsans-Medium.woff2');
+  console.log('Families:', black.family, '/', medium.family);
 
   const base = fs.readFileSync(path.join(BUILD, 'logo.svg'), 'utf8')
-    .replaceAll('Thmanyah Serif Display, serif', serif.family)
-    .replaceAll('Thmanyah Sans, sans-serif', sans.family);
+    .replaceAll('__SANS_BLACK__', black.family)
+    .replaceAll('__SANS_MED__', medium.family);
 
-  const fontBuffers = [serif.buffer, sans.buffer];
+  const fontBuffers = [black.buffer, medium.buffer];
 
   function render(svg, outName) {
     const r = new Resvg(svg, {
-      fitTo: { mode: 'width', value: 1520 },
-      font: { fontBuffers, loadSystemFonts: false, defaultFontFamily: sans.family },
+      fitTo: { mode: 'width', value: 1640 },
+      font: { fontBuffers, loadSystemFonts: false, defaultFontFamily: medium.family },
     });
     fs.writeFileSync(path.join(BUILD, outName), r.render().asPng());
     console.log('Wrote build/' + outName);
