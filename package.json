@@ -11,11 +11,14 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
-    "dist:linux": "electron-builder --linux"
+    "dist:linux": "electron-builder --linux",
+    "icons": "node scripts/make-icons.js"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "electron": "^31.7.7",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "png-to-ico": "^3.0.1"
   },
   "dependencies": {
     "@mediapipe/selfie_segmentation": "^0.1.1675465747",
@@ -38,7 +41,8 @@
       "assets/**"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -47,13 +51,21 @@
       "shortcutName": "مشهد"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "AudioVideo",
       "synopsis": "مسجّل شاشة مع تكبير ذكي يتتبّع المؤشر",
-      "executableName": "Mashhad"
+      "executableName": "Mashhad",
+      "icon": "build/icon.png"
     },
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.png",
       "category": "public.app-category.video",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
