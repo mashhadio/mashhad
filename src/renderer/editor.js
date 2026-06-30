@@ -1,6 +1,9 @@
 'use strict';
 
-const video = document.getElementById('srcVideo');
+// `video` points at the ACTIVE source's <video> element. The timeline can mix
+// several source files; only one plays/draws at a time, and `setActiveEl` swaps
+// this reference as playback crosses from one source to another.
+let video = document.getElementById('srcVideo');
 const camVideo = document.getElementById('camVideo');
 const canvas = document.getElementById('preview');
 // willReadFrequently forces a CPU-backed canvas. This both speeds up the pixel
@@ -56,7 +59,23 @@ const backBtn = document.getElementById('backBtn');
 const topStatus = document.getElementById('topStatus');
 
 let project = null;
+// The recording source ({ id, cursor, camUrl, hasAudio, ... }) when the editor
+// was opened from a recording, else null (studio-direct / import-only session).
+// Zoom-tracking, click effects and the webcam overlay only apply to it.
+let recording = null;
+// All timeline media sources. Each: { id, kind:'recording'|'import', url, el,
+// duration, width, height, hasAudio, name }. Clips reference these by `sourceId`.
+let sources = [];
+let activeSourceId = null;
+let sourceSeq = 0;
+
 let engine = null;
+// A cursor-free engine for imported clips: same smooth zoom ramps, but pans to
+// centre (imports have no cursor data to follow).
+let plainEngine = null;
+// Zoom blocks. Each carries a `sourceId` and its start/end are in that source's
+// own time, so a block stays attached to its footage across reorders. Recording
+// blocks pan with the cursor; import blocks zoom to centre.
 let blocks = [];
 let selectedBlock = null;
 let defaultScale = 2.0;
@@ -87,6 +106,14 @@ const transCanvas = document.createElement('canvas');
 const transCtx = transCanvas.getContext('2d', { alpha: false });
 let transSnapIdx = -1;      // incoming clip index the snapshot is the outgoing frame for
 let rafId = null;
+// Playback intent. Drives the render loop independently of any single element's
+// paused state — crossing into a new source momentarily pauses the fresh element
+// while its async play() resolves, and we must not let that stop the loop.
+let playing = false;
+// True while a clip-advance seek is in flight. A just-activated element reports a
+// STALE currentTime until its seek lands; without this guard the render loop's
+// clip-end test could read that stale value and skip the new clip outright.
+let mediaSeeking = false;
 let exporting = false;
 let camReady = false;
 
@@ -128,55 +155,219 @@ function fmt(t) {
 async function init() {
   await Prefs.load();
   project = await window.api.getProject();
-  if (!project) {
-    document.getElementById('content').innerHTML = '<div class="empty">No recording loaded.</div>';
-    return;
-  }
+  recording = project && project.recording ? project.recording : null;
 
-  noiseProfile.disabled = !project.hasAudio;
-  if (!project.hasAudio) {
+  applyEditorPrefs();
+  setupPanels();
+
+  // Zoom-tracking and the always-present engine are recording-bound; build one
+  // even in studio mode (with empty cursor data) so import-only sessions render.
+  rebuildEngine();
+
+  const recHasAudio = !!(recording && recording.hasAudio);
+  noiseProfile.disabled = !recHasAudio;
+  if (!recHasAudio) {
     noiseProfile.value = 'off';
-    noiseProfile.title = 'لم يُسجَّل أي ميكروفون';
+    noiseProfile.title = recording ? 'لم يُسجَّل أي ميكروفون' : 'لا يوجد تسجيل ميكروفون في جلسة الاستوديو';
   }
 
-  video.src = project.videoUrl;
-  video.muted = false;
+  if (recording) {
+    // The recording reuses the pre-existing #srcVideo element as its source el.
+    const recEl = document.getElementById('srcVideo');
+    const src = {
+      id: recording.id, kind: 'recording', url: recording.videoUrl, el: recEl,
+      duration: 0, width: 0, height: 0, hasAudio: recHasAudio, name: 'التسجيل',
+    };
+    recEl.src = recording.videoUrl;
+    recEl.muted = false;
+    await new Promise((res) => {
+      if (recEl.readyState >= 1) return res();
+      recEl.addEventListener('loadedmetadata', res, { once: true });
+      recEl.addEventListener('error', res, { once: true });
+    });
+    activeSourceId = src.id;
+    video = recEl;
+    src.duration = await resolveDuration();
+    src.width = recEl.videoWidth || 1920;
+    src.height = recEl.videoHeight || 1080;
+    sources.push(src);
 
-  await new Promise((res) => {
-    if (video.readyState >= 1) return res();
-    video.addEventListener('loadedmetadata', res, { once: true });
-  });
+    duration = src.duration;
+    setCanvasSize(src.width, src.height);
 
-  duration = await resolveDuration();
-  clips = [{ id: clipSeq++, start: 0, end: duration }];
+    if (recording.hasCam && recording.camUrl) await setupCam(recording.camUrl);
+
+    clips = [{ id: clipSeq++, sourceId: src.id, start: 0, end: src.duration }];
+    clickTimes = (recCursor().clicks || []).map((c) => c.t / 1000);
+
+    await seekTo(0);
+    autoZoom();
+    drawAt(0);
+  } else {
+    // Studio-direct: blank timeline. Canvas gets a sensible default until the
+    // first import sets the working resolution.
+    clips = [];
+    clickTimes = [];
+    setCanvasSize(1920, 1080);
+    ctx.fillStyle = '#05070b';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
   clipHistory = [];
   playIdx = 0;
   playheadEdited = 0;
 
-  canvas.width = video.videoWidth || 1920;
-  canvas.height = video.videoHeight || 1080;
-  transCanvas.width = canvas.width;
-  transCanvas.height = canvas.height;
-
-  if (project.hasCam && project.camUrl) {
-    await setupCam(project.camUrl);
-  }
-
-  await seekTo(0);
-
-  clickTimes = (project.cursor.clicks || []).map((c) => c.t / 1000);
-
-  applyEditorPrefs();
-
-  rebuildEngine();
-  autoZoom();
-  drawAt(0);
   buildTimeline();
   updateTimeLabel();
-  setupPanels();
+  updateEmptyState();
 
   // Prepare the cleaned-audio preview in the background for the current profile.
-  if (project.hasAudio && noiseProfile.value !== 'off') applyAudioPreview(noiseProfile.value);
+  if (recHasAudio && noiseProfile.value !== 'off') applyAudioPreview(noiseProfile.value);
+}
+
+function setCanvasSize(w, h) {
+  canvas.width = w || 1920;
+  canvas.height = h || 1080;
+  transCanvas.width = canvas.width;
+  transCanvas.height = canvas.height;
+}
+
+// Recording-only helpers: cursor data exists only for the recording source.
+function recCursor() { return (recording && recording.cursor) || { clicks: [], samples: [] }; }
+function sourceById(id) { return sources.find((s) => s.id === id) || null; }
+function activeSource() { return sourceById(activeSourceId); }
+function activeIsRecording() { const s = activeSource(); return !!(s && s.kind === 'recording'); }
+
+// Create a hidden <video> for an imported source and wait for its metadata.
+function createSourceEl(url) {
+  return new Promise((resolve) => {
+    const el = document.createElement('video');
+    el.src = url;
+    el.muted = true;            // imports are silent in preview until they play
+    el.playsInline = true;
+    el.preload = 'auto';
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    const done = () => resolve(el);
+    if (el.readyState >= 1) return done();
+    el.addEventListener('loadedmetadata', done, { once: true });
+    el.addEventListener('error', done, { once: true });
+  });
+}
+
+// Resolve an imported element's duration (webm/mkv often report Infinity until
+// seeked to the end first, same trick as resolveDuration for the recording).
+function resolveElDuration(el) {
+  return new Promise((resolve) => {
+    if (isFinite(el.duration) && el.duration > 0) return resolve(el.duration);
+    const onTime = () => {
+      if (isFinite(el.duration)) {
+        el.removeEventListener('durationchange', onTime);
+        el.currentTime = 0;
+        resolve(el.duration);
+      }
+    };
+    el.addEventListener('durationchange', onTime);
+    el.currentTime = 1e6;
+    setTimeout(() => resolve(isFinite(el.duration) ? el.duration : 0), 2000);
+  });
+}
+
+// Pick videos via the main process, append one clip per file to the timeline.
+async function importVideos() {
+  if (exporting) return;
+  topStatus.textContent = 'جارٍ الاستيراد…';
+  let list = [];
+  try {
+    list = await window.api.importVideos();
+  } catch (err) {
+    topStatus.textContent = 'تعذّر الاستيراد: ' + err.message;
+    return;
+  }
+  if (!list.length) { topStatus.textContent = ''; return; }
+
+  const firstSource = sources.length === 0; // first source ever -> sets canvas size
+  const wasEmpty = clips.length === 0;       // empty timeline -> park preview on import
+  pushHistory();
+  let added = 0;
+  for (const item of list) {
+    const el = await createSourceEl(item.url);
+    if (!el.videoWidth) continue; // unreadable file
+    const dur = await resolveElDuration(el);
+    if (!dur) continue;
+    const src = {
+      id: item.id, kind: 'import', url: item.url, el,
+      duration: dur, width: el.videoWidth, height: el.videoHeight,
+      hasAudio: !!item.hasAudio, name: item.name,
+    };
+    sources.push(src);
+    clips.push({ id: clipSeq++, sourceId: src.id, start: 0, end: dur });
+    added++;
+  }
+
+  // The first imported file (in a studio session) defines the working canvas.
+  if (firstSource && !recording && sources.length) {
+    setCanvasSize(sources[0].width, sources[0].height);
+  }
+
+  topStatus.textContent = added ? `أُضيف ${added} مقطع` : 'لم يُضَف أي مقطع';
+  updateUndoBtn();
+  updateEmptyState();
+  buildTimeline();
+  if (wasEmpty && clips.length) seekEdited(0);
+}
+
+// Make `id`'s element the active one: pause the others, route audio, swap the
+// global `video` reference the render/seek code reads.
+function setActiveEl(id) {
+  if (id === activeSourceId) return;
+  const s = sourceById(id);
+  if (!s) return;
+  try { if (video) { video.pause(); video.muted = true; } } catch (_) {}
+  activeSourceId = id;
+  video = s.el;
+  // Recording plays through the cleaned-audio track (or its own); imports play
+  // their own audio directly.
+  video.muted = s.kind === 'recording' ? cleanAudioActive : false;
+}
+
+// Draw an imported frame letterboxed ("contain") into the working canvas so a
+// source with a different aspect ratio isn't stretched. `scale` (>=1) zooms into
+// the centre of the frame, drawn within the same letterbox rectangle.
+function drawImportFrame(el, scale = 1) {
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  const vw = el.videoWidth, vh = el.videoHeight;
+  if (!vw || !vh) return;
+  const fit = Math.min(W / vw, H / vh);
+  const dw = vw * fit, dh = vh * fit;
+  const dx = (W - dw) / 2, dy = (H - dh) / 2;
+  const cropW = vw / scale, cropH = vh / scale;
+  const sx = (vw - cropW) / 2, sy = (vh - cropH) / 2;
+  ctx.drawImage(el, sx, sy, cropW, cropH, dx, dy, dw, dh);
+}
+
+// Toggle the "import to begin" overlay + export availability for an empty studio.
+function updateEmptyState() {
+  const empty = clips.length === 0;
+  const stage = document.querySelector('.editor-stage');
+  let ph = document.getElementById('stagePlaceholder');
+  if (empty) {
+    if (!ph && stage) {
+      ph = document.createElement('div');
+      ph.id = 'stagePlaceholder';
+      ph.className = 'stage-placeholder';
+      ph.innerHTML = '<div class="sp-emoji">🎬</div><p>أضِف فيديو لبدء التحرير</p><button class="btn-primary" id="emptyImportBtn">＋ إضافة فيديو</button>';
+      stage.appendChild(ph);
+      ph.querySelector('#emptyImportBtn').addEventListener('click', importVideos);
+    }
+  } else if (ph) {
+    ph.remove();
+  }
+  exportBtn.disabled = empty || exporting;
+  playBtn.disabled = empty;
+  splitBtn.disabled = empty;
 }
 
 // Inspector sections collapse on header click; the open/closed state persists.
@@ -299,21 +490,28 @@ function seekTo(t) {
 }
 
 function rebuildEngine() {
-  engine = new ZoomEngine(project.cursor, blocks, {
-    ramp: parseFloat(smoothRamp.value),
-    smoothing: 0.22,
-  });
+  const opts = { ramp: parseFloat(smoothRamp.value), smoothing: 0.22 };
+  engine = new ZoomEngine(recCursor(), blocks, opts);
+  plainEngine = new ZoomEngine({ clicks: [], samples: [] }, [], opts);
 }
 
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 function drawAt(t) {
-  if (!video.videoWidth) return;
-  engine.setBlocks(blocks);
-  engine.drawFrame(ctx, video, video.videoWidth, video.videoHeight, canvas.width, canvas.height, t);
-  drawClickFx(t);
-  drawCam();
+  if (!video || !video.videoWidth) return;
+  const srcBlocks = blocks.filter((b) => b.sourceId === activeSourceId);
+  if (activeIsRecording()) {
+    // Zoom-tracked path: pan/zoom (follows the cursor) + click effects + webcam.
+    engine.setBlocks(srcBlocks);
+    engine.drawFrame(ctx, video, video.videoWidth, video.videoHeight, canvas.width, canvas.height, t);
+    drawClickFx(t);
+    drawCam();
+  } else {
+    // Imported footage: letterboxed into the canvas, zoomed to centre per block.
+    plainEngine.setBlocks(srcBlocks);
+    drawImportFrame(video, plainEngine.getState(t).scale);
+  }
   drawTransition(t);
 }
 
@@ -393,12 +591,12 @@ function easeOutCubic(p) { return 1 - Math.pow(1 - p, 3); }
 // Click effect at each recent click, placed in the zoomed view. Style, colour
 // and size are user-configurable.
 function drawClickFx(t) {
-  if (!clickFx.checked || !(project.cursor.clicks || []).length) return;
+  if (!clickFx.checked || !(recCursor().clicks || []).length) return;
   const { r: cr, g: cg, b: cb } = hexToRgb(clickColor.value);
   const baseR = canvas.height * (parseInt(clickSize.value, 10) / 100);
   const style = clickStyle.value;
 
-  for (const c of project.cursor.clicks) {
+  for (const c of recCursor().clicks) {
     const tc = c.t / 1000;
     const age = t - tc;
     if (age < 0) break; // clicks are time-ordered; the rest are in the future
@@ -515,13 +713,16 @@ function drawCam() {
 // When cleaned audio is active we mute the raw video track and play the cleaned
 // track instead; otherwise the video plays its own (raw) audio.
 function updateAudioRouting() {
-  video.muted = cleanAudioActive;
+  if (!video) return;
+  // Recording: route through the cleaned-audio track when active (mute the raw
+  // video). Imports always play their own audio.
+  video.muted = activeIsRecording() ? cleanAudioActive : false;
 }
 
 // Render (via ffmpeg) and load the cleaned mic audio for the given profile, then
 // route preview playback through it. profile === 'off' restores the raw audio.
 async function applyAudioPreview(profile) {
-  if (!project || !project.hasAudio) return;
+  if (!recording || !recording.hasAudio) return;
   const myToken = ++audioPreviewToken;
 
   if (profile === 'off') {
@@ -559,43 +760,81 @@ async function applyAudioPreview(profile) {
   audioStatus.textContent = '· مُنقّى ✓';
 }
 
-// Advance the source <video> to the start of the next clip in edit order.
-// Returns false when the playhead has run off the end of the timeline.
+// Point the media at clip `idx`'s source + start frame, switching the active
+// <video> element when the clip belongs to a different source. The recording's
+// webcam and cleaned-audio tracks are only synced when the target is the
+// recording — they don't apply to imported footage.
+function gotoClipMedia(idx) {
+  const c = clips[idx];
+  if (!c) return;
+  setActiveEl(c.sourceId);
+  const isRec = activeIsRecording();
+  if (camReady) {
+    if (isRec) camVideo.currentTime = Math.min(c.start, camVideo.duration || c.start);
+    else camVideo.pause();
+  }
+  if (cleanAudioActive) {
+    if (isRec) cleanAudio.currentTime = c.start;
+    else cleanAudio.pause();
+  }
+  lastFxTime = c.start; // don't fire clicks across the seam
+  // If the element isn't already parked at the target, the seek is async and its
+  // currentTime stays stale until 'seeked' — guard the render loop until then.
+  if (Math.abs(video.currentTime - c.start) < 0.05) {
+    mediaSeeking = false;
+  } else {
+    mediaSeeking = true;
+    const el = video;
+    const onSeeked = () => { el.removeEventListener('seeked', onSeeked); if (el === video) mediaSeeking = false; };
+    el.addEventListener('seeked', onSeeked);
+    setTimeout(() => { if (el === video) mediaSeeking = false; }, 1500); // safety
+  }
+  video.currentTime = c.start;
+}
+
+// Advance to the start of the next clip in edit order. Returns false when the
+// playhead has run off the end of the timeline.
 function advanceToNextClip() {
   if (playIdx >= clips.length - 1) return false;
   playIdx++;
-  const nc = clips[playIdx];
-  if (camReady) camVideo.currentTime = Math.min(nc.start, camVideo.duration || nc.start);
-  if (cleanAudioActive) cleanAudio.currentTime = nc.start;
-  video.currentTime = nc.start;
-  lastFxTime = nc.start; // don't fire clicks across the seam
+  gotoClipMedia(playIdx);
   return true;
 }
 
 const SEAM = 0.03; // advance this many seconds before a clip's source end
 
 function renderLoop() {
-  // Keep going when the media element fires 'ended' mid-timeline (a reordered
-  // clip can hit the true source end); only bail on an intentional pause.
-  if (video.paused && !video.ended) return;
+  // Bail only on an intentional pause. A single element being momentarily paused
+  // (an 'ended' mid-timeline, or a just-activated source) must not stop us.
+  if (!playing) return;
   const c = clips[playIdx];
   if (!c) { pause(); return; }
   drawClipIdx = playIdx;
+
+  // A clip-advance seek is still settling: draw the current frame and wait, so a
+  // stale currentTime can't be mistaken for reaching this clip's end.
+  if (mediaSeeking) {
+    drawAt(video.currentTime);
+    rafId = requestAnimationFrame(renderLoop);
+    return;
+  }
 
   // Reached the end of the current clip -> move to the next in edit order.
   if (video.ended || video.currentTime >= c.end - SEAM) {
     snapshotOutgoing(playIdx + 1); // freeze this frame for the next clip's transition
     const next = clips[playIdx + 1];
-    const contiguous = next && !video.ended && Math.abs(next.start - c.end) < 0.04;
+    // Only keep rolling without a seek when the next clip continues the SAME
+    // source contiguously (a plain split). Across sources we always switch.
+    const contiguous = next && next.sourceId === c.sourceId && !video.ended && Math.abs(next.start - c.end) < 0.04;
     if (contiguous) {
-      playIdx++; // a plain split: keep rolling through the seam without a seek
+      playIdx++;
     } else if (!advanceToNextClip()) {
       pause();
       playIdx = clips.length - 1;
       seekEdited(editedDuration());
       return;
     } else if (video.paused) {
-      video.play().catch(() => {}); // resume if the seek followed an 'ended'
+      video.play().catch(() => {}); // resume the (possibly newly-active) element
     }
     rafId = requestAnimationFrame(renderLoop);
     return;
@@ -605,9 +844,20 @@ function renderLoop() {
   playheadEdited = clamp(editedStartOf(playIdx) + (video.currentTime - c.start), 0, editedDuration());
   movePlayhead(playheadEdited);
   updateTimeLabel();
-  playClickSounds(video.currentTime);
-  if (cleanAudioActive && Math.abs(cleanAudio.currentTime - video.currentTime) > 0.18) {
-    cleanAudio.currentTime = video.currentTime;
+
+  // Keep the recording-only aux tracks (webcam, cleaned mic) in step with
+  // playback, and idle them while an imported clip is on screen.
+  if (activeIsRecording()) {
+    playClickSounds(video.currentTime);
+    if (camReady && camVideo.paused) camVideo.play().catch(() => {});
+    if (cleanAudioActive) {
+      if (cleanAudio.paused) cleanAudio.play().catch(() => {});
+      if (Math.abs(cleanAudio.currentTime - video.currentTime) > 0.18) cleanAudio.currentTime = video.currentTime;
+    }
+  } else {
+    lastFxTime = video.currentTime; // no recorded clicks belong to imports
+    if (camReady && !camVideo.paused) camVideo.pause();
+    if (cleanAudioActive && !cleanAudio.paused) cleanAudio.pause();
   }
   rafId = requestAnimationFrame(renderLoop);
 }
@@ -630,17 +880,21 @@ function playClickSounds(t) {
 }
 
 function play() {
+  if (!clips.length) return;
   if (playheadEdited >= editedDuration() - 0.05) seekEdited(0); // restart from top
+  playing = true;
   lastFxTime = video.currentTime;
   updateAudioRouting();
-  video.play();
-  if (camReady) camVideo.play().catch(() => {});
-  if (cleanAudioActive) { cleanAudio.currentTime = video.currentTime; cleanAudio.play().catch(() => {}); }
+  video.play().catch(() => {});
+  const isRec = activeIsRecording();
+  if (isRec && camReady) camVideo.play().catch(() => {});
+  if (isRec && cleanAudioActive) { cleanAudio.currentTime = video.currentTime; cleanAudio.play().catch(() => {}); }
   playBtn.textContent = '⏸ إيقاف مؤقت';
   renderLoop();
 }
 function pause() {
-  video.pause();
+  playing = false;
+  if (video) video.pause();
   if (camReady) camVideo.pause();
   cleanAudio.pause();
   playBtn.textContent = '▶ تشغيل';
@@ -648,7 +902,7 @@ function pause() {
 }
 playBtn.addEventListener('click', () => {
   if (exporting) return; // the export pass owns playback
-  video.paused ? play() : pause();
+  playing ? pause() : play();
 });
 
 function updateTimeLabel() {
@@ -664,18 +918,28 @@ function buildTimeline() {
   const w = timeline.clientWidth;
   const total = editedDuration() || 1;
 
+  // Per-source colour so clips from different files read as distinct on the track.
+  const sourceColors = {};
+  let colorSeq = 0;
+  const COLORS = ['', 'src-b', 'src-c', 'src-d', 'src-e', 'src-f'];
+  sources.forEach((s) => { sourceColors[s.id] = s.kind === 'recording' ? '' : COLORS[(1 + colorSeq++) % COLORS.length]; });
+
   // Clip track — the draggable, reorderable base layer.
   clips.forEach((c, ci) => {
     const hasTrans = ci > 0 && c.transition && c.transition.type !== 'none';
+    const src = sourceById(c.sourceId);
+    const isImport = src && src.kind === 'import';
     const el = document.createElement('div');
-    el.className = 'clip' + (c.id === selectedClipId ? ' selected' : '') + (hasTrans ? ' has-trans' : '');
+    el.className = 'clip' + (c.id === selectedClipId ? ' selected' : '') + (hasTrans ? ' has-trans' : '')
+      + (isImport ? ' import' : '') + (sourceColors[c.sourceId] ? ' ' + sourceColors[c.sourceId] : '');
     el.dataset.cidx = ci;
     el.style.left = `${(editedStartOf(ci) / total) * w}px`;
     el.style.width = `${(clipLen(c) / total) * w}px`;
     const transLabel = hasTrans ? (TRANSITION_LABELS[c.transition.type] || c.transition.type) : '';
-    el.title = hasTrans
-      ? `انتقال ${transLabel} · اسحب لإعادة الترتيب · ✕ أو Delete للحذف`
-      : 'اسحب لإعادة الترتيب · ✕ أو Delete للحذف';
+    const srcName = src ? src.name : '';
+    el.title = (isImport ? `${srcName} · ` : '')
+      + (hasTrans ? `انتقال ${transLabel} · ` : '')
+      + 'اسحب لإعادة الترتيب · ✕ أو Delete للحذف';
     const badge = hasTrans ? `<span class="clip-trans" title="انتقال ${transLabel}">▶</span>` : '';
     el.innerHTML = `${badge}<span class="clip-label">${fmt(clipLen(c))}</span><button class="clip-delete" title="حذف المقطع" tabindex="-1">✕</button>`;
     el.querySelector('.clip-delete').addEventListener('mousedown', (e) => e.stopPropagation());
@@ -686,9 +950,10 @@ function buildTimeline() {
     timeline.appendChild(el);
   });
 
-  // Recorded clicks, mapped onto the edited timeline (dropped if cut out).
-  (project.cursor.clicks || []).forEach((c) => {
-    const te = sourceToEdited(c.t / 1000);
+  // Recorded clicks, mapped onto the edited timeline (dropped if cut out). Only
+  // the recording's clips carry clicks.
+  if (recording) (recCursor().clicks || []).forEach((c) => {
+    const te = sourceToEdited(c.t / 1000, recording.id);
     if (te == null) return;
     const tick = document.createElement('div');
     tick.className = 'click-tick';
@@ -696,10 +961,11 @@ function buildTimeline() {
     timeline.appendChild(tick);
   });
 
-  // Zoom blocks live in source time; draw one rect per clip they overlap so they
-  // stay visually attached to their footage no matter how clips are reordered.
+  // Zoom blocks live in their source's time; draw one rect per clip of that
+  // source they overlap so they stay attached to their footage when clips reorder.
   blocks.forEach((b, bi) => {
     clips.forEach((c, ci) => {
+      if (c.sourceId !== b.sourceId) return;
       const s = Math.max(b.start, c.start);
       const e = Math.min(b.end, c.end);
       if (e <= s + 1e-3) return;
@@ -725,19 +991,36 @@ function movePlayhead(te) {
   playhead.style.left = `${(te / (editedDuration() || 1)) * timeline.clientWidth}px`;
 }
 
-// Seek by EDITED time: resolve to the source frame inside the active clip.
+// Redraw once the element's async seek lands, so scrubbing across sources shows
+// the correct frame rather than the pre-seek one. No-op while playing (the
+// render loop already draws every frame).
+function redrawAfterSeek(el, t) {
+  const onSeeked = () => {
+    el.removeEventListener('seeked', onSeeked);
+    if (video === el && video.paused) drawAt(t);
+  };
+  el.addEventListener('seeked', onSeeked);
+}
+
+// Seek by EDITED time: resolve to the source frame inside the active clip,
+// switching the active source element when the clip lives in a different file.
 function seekEdited(te) {
+  if (!clips.length) { playheadEdited = 0; movePlayhead(0); updateTimeLabel(); return; }
+  mediaSeeking = false; // a manual scrub supersedes any pending clip-advance seek
   te = clamp(te, 0, Math.max(0, editedDuration() - 0.001));
   const m = editedToSource(te);
   playIdx = m.idx;
   drawClipIdx = m.idx;
   transSnapIdx = -1; // a seek isn't a play-through; never composite a frozen frame
   playheadEdited = te;
-  if (camReady) camVideo.currentTime = Math.min(m.src, camVideo.duration || m.src);
-  if (cleanAudioActive) cleanAudio.currentTime = Math.min(m.src, cleanAudio.duration || m.src);
+  setActiveEl(m.clip.sourceId);
+  const isRec = activeIsRecording();
+  if (isRec && camReady) camVideo.currentTime = Math.min(m.src, camVideo.duration || m.src);
+  if (isRec && cleanAudioActive) cleanAudio.currentTime = Math.min(m.src, cleanAudio.duration || m.src);
   video.currentTime = m.src;
   lastFxTime = m.src;
   drawAt(m.src);
+  redrawAfterSeek(video, m.src);
   movePlayhead(te);
   updateTimeLabel();
 }
@@ -769,8 +1052,15 @@ timeline.addEventListener('mousedown', (e) => {
   const blockEl = e.target.closest('.block');
   if (blockEl) {
     const b = blocks[+blockEl.dataset.block];
-    const c = clips[+blockEl.dataset.clip];
+    const ci = +blockEl.dataset.clip;
+    const c = clips[ci];
     selectBlock(b);
+    // If this block sits on a clip whose source isn't the one on screen, park the
+    // playhead on it so the preview reflects edits live (no-op for active-source
+    // blocks, so it doesn't disturb the common case).
+    if (c && c.sourceId !== activeSourceId) {
+      seekEdited(clamp(editedStartOf(ci) + (b.start - c.start) + 0.001, 0, editedDuration()));
+    }
     let mode = 'move';
     if (e.target.classList.contains('l')) mode = 'l';
     else if (e.target.classList.contains('r')) mode = 'r';
@@ -904,17 +1194,27 @@ function hideInsertMarker() {
 // Zoom editing buttons
 // ---------------------------------------------------------------------------
 function autoZoom() {
-  blocks = ZoomEngine.autoBlocks(project.cursor, { scale: defaultScale, duration });
+  if (!recording) { topStatus.textContent = 'التكبير التلقائي يعتمد على نقرات التسجيل — أضِف تكبيرًا يدويًا بزر «＋ تكبير هنا».'; return; }
+  // Replace only the recording's auto blocks; keep any manual import-clip zooms.
+  const auto = ZoomEngine.autoBlocks(recCursor(), { scale: defaultScale, duration })
+    .map((b) => ({ ...b, sourceId: recording.id }));
+  blocks = blocks.filter((b) => b.sourceId !== recording.id).concat(auto);
   selectBlock(null);
   buildTimeline();
   drawAt(video.currentTime);
 }
 
+// Add a zoom block on the ACTIVE clip's source at the playhead. Works for both
+// recording and imported clips (imports zoom to centre).
 function addZoomHere() {
+  if (!clips.length) { topStatus.textContent = 'استورد فيديو أو ابدأ تسجيلًا أولًا.'; return; }
+  const src = activeSource();
+  if (!src) return;
   const t = video.currentTime;
+  const maxEnd = src.duration || (t + DEFAULT_BLOCK_LEN);
   const start = Math.max(0, t - 0.2);
-  const end = Math.min(duration, start + DEFAULT_BLOCK_LEN);
-  const b = { start, end, scale: defaultScale };
+  const end = Math.min(maxEnd, start + DEFAULT_BLOCK_LEN);
+  const b = { sourceId: src.id, start, end, scale: defaultScale };
   blocks.push(b);
   buildTimeline();
   selectBlock(b);
@@ -972,18 +1272,23 @@ function editedToSource(te) {
   return { idx: 0, clip: clips[0], src: clips[0].start };
 }
 
-// source time -> edited time, or null if that moment was cut out.
-function sourceToEdited(ts) {
+// source time -> edited time, or null if that moment was cut out. `sourceId`
+// restricts the match to clips from one source (recorded clicks/zoom live in the
+// recording's source time and must not map onto imported clips).
+function sourceToEdited(ts, sourceId) {
   let acc = 0;
   for (const c of clips) {
-    if (ts >= c.start && ts < c.end) return acc + (ts - c.start);
+    if ((sourceId == null || c.sourceId === sourceId) && ts >= c.start && ts < c.end) return acc + (ts - c.start);
     acc += clipLen(c);
   }
   return null;
 }
 
-function clipIdxForSource(ts) {
-  for (let i = 0; i < clips.length; i++) if (ts >= clips[i].start && ts < clips[i].end) return i;
+function clipIdxForSource(ts, sourceId) {
+  for (let i = 0; i < clips.length; i++) {
+    const c = clips[i];
+    if ((sourceId == null || c.sourceId === sourceId) && ts >= c.start && ts < c.end) return i;
+  }
   return 0;
 }
 
@@ -1010,8 +1315,10 @@ function undo() {
   clips = clipHistory.pop();
   if (!clips.some((c) => c.id === selectedClipId)) selectedClipId = null;
   updateUndoBtn();
+  updateEmptyState();
   buildTimeline();
-  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+  if (clips.length) seekEdited(clamp(playheadEdited, 0, editedDuration()));
+  else { playheadEdited = 0; movePlayhead(0); updateTimeLabel(); }
 }
 
 function splitAtPlayhead() {
@@ -1023,7 +1330,7 @@ function splitAtPlayhead() {
   if (t <= c.start + 0.05 || t >= c.end - 0.05) return;
   pushHistory();
   const idx = clips.indexOf(c);
-  const right = { id: clipSeq++, start: t, end: c.end };
+  const right = { id: clipSeq++, sourceId: c.sourceId, start: t, end: c.end };
   c.end = t;
   clips.splice(idx + 1, 0, right);
   selectClip(right.id); // redraws the timeline
@@ -1033,15 +1340,15 @@ function deleteClip(id) {
   if (exporting) return;
   const c = clips.find((x) => x.id === id);
   if (!c) return;
-  if (clips.length <= 1) {
-    topStatus.textContent = 'لا يمكن حذف المقطع الأخير المتبقّي.';
-    return;
-  }
   pushHistory();
   clips = clips.filter((x) => x.id !== id);
   if (selectedClipId === id) selectedClipId = null;
+  // The leading clip can't carry an intro transition — drop one if it shifted up.
+  if (clips[0] && clips[0].transition) delete clips[0].transition;
+  updateEmptyState();
   buildTimeline();
-  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+  if (clips.length) seekEdited(clamp(playheadEdited, 0, editedDuration()));
+  else { playheadEdited = 0; movePlayhead(0); updateTimeLabel(); ctx.fillStyle = '#05070b'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
 }
 
 // Move the clip at index `from` so it sits at insertion slot `to` (0..length).
@@ -1057,6 +1364,8 @@ function moveClip(from, to) {
   seekEdited(clamp(playheadEdited, 0, editedDuration()));
 }
 
+const importBtn = document.getElementById('importBtn');
+importBtn.addEventListener('click', importVideos);
 autoZoomBtn.addEventListener('click', autoZoom);
 addZoomBtn.addEventListener('click', addZoomHere);
 clearZoomBtn.addEventListener('click', clearZoom);
@@ -1117,7 +1426,8 @@ window.addEventListener('keydown', (e) => {
 
   if (e.key === ' ' || e.key === 'Spacebar') {
     e.preventDefault();
-    video.paused ? play() : pause();
+    if (!clips.length) return;
+    playing ? pause() : play();
     return;
   }
 
@@ -1234,42 +1544,37 @@ clickVol.addEventListener('input', () => { clickVolVal.textContent = `${clickVol
 // in the preview without exporting. Each press advances to the next click.
 const testFxBtn = document.getElementById('testFxBtn');
 testFxBtn.addEventListener('click', () => {
-  if (!clickTimes.length) {
-    topStatus.textContent = 'لا توجد نقرات مُسجَّلة في هذا المقطع للمعاينة.';
+  if (!recording || !clickTimes.length) {
+    topStatus.textContent = 'لا توجد نقرات مُسجَّلة للمعاينة.';
+    return;
+  }
+  // Work in edited time so clicks that were cut out are skipped automatically.
+  const live = clickTimes
+    .map((t) => sourceToEdited(t, recording.id))
+    .filter((te) => te != null)
+    .sort((a, b) => a - b);
+  if (!live.length) {
+    topStatus.textContent = 'كل النقرات المُسجَّلة محذوفة من المونتاج.';
     return;
   }
   topStatus.textContent = '';
-  let tc = clickTimes.find((x) => x > video.currentTime + 0.05);
-  if (tc === undefined) tc = clickTimes[0]; // wrap to the first click
-  const start = Math.max(0, tc - 0.4);
-  const stopAt = Math.min(duration || tc + 0.8, tc + 0.7);
+  const teClick = live.find((te) => te > playheadEdited + 0.05) ?? live[0];
+  const stopTe = Math.min(editedDuration(), teClick + 0.7);
 
   pause();
-  seekTo(start).then(() => {
-    playIdx = clipIdxForSource(start);
-    const te = sourceToEdited(start);
-    if (te != null) playheadEdited = te;
-    lastFxTime = start;
-    play();
-    const watch = () => {
-      if (video.paused) return;
-      if (video.currentTime >= stopAt || video.ended) {
-        pause();
-        // Park just after the click so the ripple stays frozen on screen.
-        seekTo(tc + 0.12).then(() => {
-          playIdx = clipIdxForSource(tc + 0.12);
-          const pe = sourceToEdited(tc + 0.12);
-          if (pe != null) playheadEdited = pe;
-          drawAt(video.currentTime);
-          movePlayhead(playheadEdited);
-          updateTimeLabel();
-        });
-      } else {
-        requestAnimationFrame(watch);
-      }
-    };
-    requestAnimationFrame(watch);
-  });
+  seekEdited(Math.max(0, teClick - 0.4));
+  play();
+  const watch = () => {
+    if (!playing) return;
+    if (playheadEdited >= stopTe) {
+      pause();
+      // Park just after the click so the ripple stays frozen on screen.
+      seekEdited(Math.min(editedDuration() - 0.001, teClick + 0.12));
+    } else {
+      requestAnimationFrame(watch);
+    }
+  };
+  requestAnimationFrame(watch);
 });
 clickSoundName.addEventListener('change', () => {
   clickAudio = new Audio(`../../assets/sfx/${clickSoundName.value}.wav`);
@@ -1291,42 +1596,66 @@ window.addEventListener('resize', () => {
 // Export
 // ---------------------------------------------------------------------------
 async function runExport() {
-  if (exporting) return;
+  if (exporting || !clips.length) return;
   exporting = true;
   pause();
+  // Capture from the first clip's source.
+  if (clips[0]) { setActiveEl(clips[0].sourceId); }
   exportBtn.disabled = true;
   progress.classList.add('active');
-  progressFill.style.width = '0%';
-  exportStatus.textContent = 'جارٍ معالجة التكبير والكاميرا…';
 
-  // Use a much higher intermediate bitrate for the editing master so the
-  // canvas-render generation doesn't soften the final.
+  const totalDur = editedDuration();
+  // Single place to drive the bar + the percentage label so the two never drift.
+  const setProgress = (pct, label) => {
+    pct = Math.max(0, Math.min(100, Math.round(pct)));
+    progressFill.style.width = pct + '%';
+    exportStatus.textContent = label ? `${label} · ${pct}٪` : `${pct}٪`;
+  };
+  setProgress(0, 'جارٍ التحضير');
+
+  // Two phases share the bar: the canvas render (0–60%) then the ffmpeg encode
+  // (60–99%), so the user sees steady movement through the whole export.
   const interBitrate = exportFormat.value === 'master' ? 50_000_000 : 16_000_000;
   const zoomedBuffer = await renderZoomedWebm((p) => {
-    progressFill.style.width = `${Math.round(p * 60)}%`;
+    setProgress(p * 60, 'جارٍ تجهيز اللقطات');
   }, interBitrate);
 
-  exportStatus.textContent = 'جارٍ الترميز وتنقية الصوت…';
-  progressFill.style.width = '70%';
+  setProgress(60, 'جارٍ الترميز وتنقية الصوت');
 
-  const off = window.api.onExportProgress((line) => { exportStatus.textContent = line; });
+  // ffmpeg prints `time=HH:MM:SS.ss` as it encodes; map that against the clip
+  // duration to advance the bar from 60% toward 99% during the encode.
+  const off = window.api.onExportProgress((line) => {
+    const m = /time=(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(line);
+    if (m && totalDur > 0) {
+      const secs = (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]);
+      const frac = Math.max(0, Math.min(1, secs / totalDur));
+      setProgress(60 + frac * 39, 'جارٍ الترميز والتصدير');
+    }
+  });
 
   // Click sounds must land on the edited timeline; drop any that were cut out.
-  const editedClicks = clickTimes.map(sourceToEdited).filter((t) => t != null);
+  const editedClicks = recording
+    ? clickTimes.map((t) => sourceToEdited(t, recording.id)).filter((t) => t != null)
+    : [];
+
+  // Pass the clip list (with source ids) whenever the timeline isn't a single,
+  // untrimmed recording clip — that lone case keeps the original fast path.
+  const pureUnedited = recording && !isEdited() && clips.length === 1 && clips[0].sourceId === recording.id;
+  const clipsPayload = pureUnedited
+    ? null
+    : clips.map((c) => ({ sourceId: c.sourceId, start: c.start, end: c.end }));
 
   try {
     const res = await window.api.runExport({
       zoomedBuffer,
       options: {
-        audioEnabled: project.hasAudio && noiseProfile.value !== 'off',
         noiseProfile: noiseProfile.value,
         clickSound: clickSound.checked,
         clickTimes: clickSound.checked ? editedClicks : [],
         clickSoundName: clickSoundName.value,
         clickVolume: parseInt(clickVol.value, 10) / 100,
         durationSec: editedDuration(),
-        // Source ranges in edit order; FFmpeg cuts + reorders the mic to match.
-        clips: isEdited() ? clips.map((c) => ({ start: c.start, end: c.end })) : null,
+        clips: clipsPayload,
         format: exportFormat.value,
         quality: exportQuality.value,
         resolution: exportResolution.value,
@@ -1336,7 +1665,7 @@ async function runExport() {
     if (res.canceled) {
       exportStatus.textContent = 'أُلغِي التصدير.';
     } else {
-      progressFill.style.width = '100%';
+      setProgress(100, 'تم');
       exportStatus.textContent = 'تم! حُفظ في ' + res.outputPath;
       await window.api.revealFile(res.outputPath);
     }
@@ -1348,6 +1677,9 @@ async function runExport() {
     progress.classList.remove('active');
     exportBtn.disabled = false;
     exporting = false;
+    // The capture pass left the active element on the last clip's source; restore
+    // the preview to the playhead so the active element/frame are consistent.
+    if (clips.length) seekEdited(clamp(playheadEdited, 0, editedDuration()));
   }
 }
 
@@ -1395,6 +1727,7 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
       if (video.ended || video.currentTime >= seq[segIdx].end - 0.02) {
         snapshotOutgoing(segIdx + 1); // freeze for the next clip's transition
         elapsedBefore += seq[segIdx].end - seq[segIdx].start;
+        const prevSourceId = seq[segIdx].sourceId;
         segIdx++;
         if (segIdx >= seq.length) {
           finished = true;
@@ -1403,11 +1736,25 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
           setTimeout(() => rec.stop(), 200);
           return;
         }
-        const target = seq[segIdx].start;
-        if (camReady) camVideo.currentTime = Math.min(target, camVideo.duration || target);
-        // Contiguous clips (a plain split): we're already there, keep rolling
-        // without a seek — seeking to the same spot never fires 'seeked'.
+        const nextClip = seq[segIdx];
+        const target = nextClip.start;
+        // Crossing into a different source file: swap the active element.
+        const switching = nextClip.sourceId !== prevSourceId;
+        if (switching) {
+          try { video.pause(); } catch (_) {}
+          setActiveEl(nextClip.sourceId);
+          video.muted = true; // element audio is never captured; keep it silent
+        }
+        // Sync the recording-only webcam to the new clip when it's a recording
+        // clip; otherwise idle it (it isn't drawn over imported footage).
+        if (camReady) {
+          if (activeIsRecording()) camVideo.currentTime = Math.min(target, camVideo.duration || target);
+          else camVideo.pause();
+        }
+        // Already at the target frame (a plain split, or a fresh element at 0):
+        // keep rolling without a seek — seeking to the same spot fires no event.
         if (!video.ended && Math.abs(video.currentTime - target) < 0.04) {
+          if (video.paused) video.play().catch(() => {});
           lastFrame = -1;
           requestAnimationFrame(step);
           return;
@@ -1419,23 +1766,30 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
         // latency — bloating the video past the (precisely-cut) audio and
         // leaving a freeze-frame at every cut.
         if (rec.state === 'recording') rec.pause();
+        const el = video; // the element we're seeking (may have just switched)
         let settled = false;
         const onSeeked = () => {
           if (settled) return;
           settled = true;
-          video.removeEventListener('seeked', onSeeked);
+          el.removeEventListener('seeked', onSeeked);
           skipping = false;
           lastFrame = -1;
-          // If we just seeked away from the true media end, the element paused
-          // on 'ended' — resume so the next clip actually plays out.
-          if (video.paused) video.play().catch(() => {});
+          // Resume: a fresh/just-switched element is paused, and one seeked away
+          // from the true media end paused itself on 'ended'.
+          if (el === video && el.paused) el.play().catch(() => {});
           if (rec.state === 'paused') rec.resume();
           requestAnimationFrame(step);
         };
-        video.addEventListener('seeked', onSeeked);
-        video.currentTime = target;
+        el.addEventListener('seeked', onSeeked);
+        el.currentTime = target;
         setTimeout(onSeeked, 1500); // safety if 'seeked' is missed
         return;
+      }
+
+      // Keep the webcam advancing during recording clips, idle during imports.
+      if (camReady) {
+        if (activeIsRecording()) { if (camVideo.paused) camVideo.play().catch(() => {}); }
+        else if (!camVideo.paused) camVideo.pause();
       }
 
       // Throttle to ~60fps so a 144Hz display doesn't produce a 144fps file.
@@ -1460,13 +1814,15 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
       rec.start();
       pushFrame();
       video.play();
-      if (camReady) camVideo.play().catch(() => {});
+      // The webcam belongs to the recording; only run it when the first clip is
+      // a recording clip (the seam re-syncs it as later recording clips arrive).
+      if (camReady && activeIsRecording()) camVideo.play().catch(() => {});
       requestAnimationFrame(step);
     };
 
     video.pause();
     video.muted = true;
-    if (camReady) camVideo.currentTime = startAt;
+    if (camReady && activeIsRecording()) camVideo.currentTime = startAt;
     // Seek to the first clip; if we're already there, start immediately.
     if (Math.abs(video.currentTime - startAt) < 0.05) {
       begin();
@@ -1486,7 +1842,12 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
 }
 
 exportBtn.addEventListener('click', runExport);
-backBtn.addEventListener('click', () => window.api.backHome());
+backBtn.addEventListener('click', () => {
+  // Guard against discarding an import-only studio session on a stray click.
+  const hasImports = sources.some((s) => s.kind === 'import');
+  if (hasImports && !confirm('العودة إلى شاشة التسجيل ستترك المونتاج الحالي. متابعة؟')) return;
+  window.api.backHome();
+});
 
 init().catch((e) => {
   console.error(e);

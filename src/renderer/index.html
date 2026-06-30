@@ -21,6 +21,7 @@
       </span>
       <span class="hotkey-chip" title="اختصار عام لبدء/إيقاف التسجيل"><kbd id="hotkeyHint">Ctrl+Shift+R</kbd></span>
       <button class="btn-primary" id="recordBtn" disabled>● بدء التسجيل</button>
+      <button class="btn-ghost" id="openStudioBtn" title="افتح الاستوديو واستورد مقاطع فيديو للتحرير">🎬 الاستوديو</button>
       <button class="btn-ghost" id="shortcutsBtn" title="اختصارات لوحة المفاتيح">⌨ اختصارات</button>
     </div>
 
@@ -81,6 +82,14 @@
           <select id="camSelect"></select>
         </div>
         <div class="field">
+          <label for="qualitySelect">جودة التسجيل</label>
+          <select id="qualitySelect">
+            <option value="performance">الأداء — أجهزة ضعيفة</option>
+            <option value="balanced" selected>متوازن</option>
+            <option value="high">جودة عالية</option>
+          </select>
+        </div>
+        <div class="field">
           <label for="fpsSelect">معدل الإطارات</label>
           <select id="fpsSelect">
             <option value="30">30 إطار/ث</option>
@@ -95,6 +104,15 @@
           <label>&nbsp;</label>
           <label class="switch"><input type="checkbox" id="camEnabled" /> عرض الكاميرا</label>
         </div>
+      </div>
+
+      <div class="perf-guide" id="perfGuide">
+        <div class="perf-guide-head">
+          <span class="perf-guide-icon" id="perfGuideIcon">⚖️</span>
+          <span class="perf-guide-title" id="perfGuideTitle"></span>
+        </div>
+        <p class="perf-guide-body" id="perfGuideBody"></p>
+        <div class="perf-guide-meter" id="perfGuideMeter" aria-hidden="true"></div>
       </div>
 
       <div id="camPreviewBox" class="cam-controls-row" style="display:none">

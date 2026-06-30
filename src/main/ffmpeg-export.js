@@ -138,22 +138,79 @@ function probeHeight(filePath) {
   });
 }
 
+// Build the soundtrack for a timeline that mixes several source files. Each clip
+// is trimmed from its own source (or filled with silence when the source has no
+// audio) and the segments are concatenated in edit order. Recording-source clips
+// get the chosen denoise chain; imported clips pass through untouched. Everything
+// is normalised to stereo 48 kHz so concat is valid. Returns the output label, or
+// null when the whole timeline is silent. `addInput(path)` registers an ffmpeg
+// input and returns its index.
+function buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourceId, noiseChain) {
+  const STEREO = 'aformat=sample_rates=48000:channel_layouts=stereo';
+
+  // Count how many clips draw audio from each source, then register one input
+  // per audio-bearing source and fan it out into one copy per consuming clip.
+  const used = {}; // sourceId -> { index, count, queue: [pad labels] }
+  for (const c of cutSegs) {
+    const s = sources[c.sourceId];
+    if (s && s.hasAudio) (used[c.sourceId] || (used[c.sourceId] = { count: 0 })).count++;
+  }
+  const ids = Object.keys(used);
+  if (!ids.length) return null; // entirely silent timeline -> no audio track
+
+  for (const id of ids) {
+    const u = used[id];
+    u.index = addInput(sources[id].path);
+    u.queue = [];
+    if (u.count === 1) {
+      u.queue.push(`[${u.index}:a]`);
+    } else {
+      const outs = [];
+      for (let i = 0; i < u.count; i++) outs.push(`[s${u.index}_${i}]`);
+      parts.push(`[${u.index}:a]asplit=${u.count}${outs.join('')}`);
+      u.queue.push(...outs);
+    }
+  }
+
+  const segLabels = [];
+  cutSegs.forEach((c, i) => {
+    const s = sources[c.sourceId];
+    const seg = `[seg${i}]`;
+    if (s && s.hasAudio) {
+      const pad = used[c.sourceId].queue.shift();
+      const denoise = c.sourceId === recordingSourceId && noiseChain ? `,${noiseChain}` : '';
+      parts.push(`${pad}atrim=start=${(+c.start).toFixed(3)}:end=${(+c.end).toFixed(3)},asetpts=PTS-STARTPTS${denoise},${STEREO}${seg}`);
+    } else {
+      const len = Math.max(0.001, c.end - c.start).toFixed(3);
+      parts.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${len},asetpts=PTS-STARTPTS${seg}`);
+    }
+    segLabels.push(seg);
+  });
+
+  if (segLabels.length === 1) {
+    parts.push(`${segLabels[0]}anull[voice]`);
+  } else {
+    parts.push(`${segLabels.join('')}concat=n=${segLabels.length}:v=0:a=1[voice]`);
+  }
+  return '[voice]';
+}
+
 /**
- * Mux the canvas-rendered (zoomed + webcam) video with the original mic audio,
+ * Mux the canvas-rendered (zoomed + webcam) video with the timeline's audio,
  * applying the chosen noise-reduction chain and optional click sounds, then
  * encode to the requested format.
  */
 async function exportVideo({
   zoomedVideoPath,
-  originalPath,
-  hasAudio,
+  clips = null,
+  sources = {},
+  recordingSourceId = null,
   noiseProfile,
   clickSound,
   clickTimes = [],
   clickSoundName = 'mouse',
   clickVolume = 0.7,
   durationSec = 0,
-  clips = null,
   format = 'mp4',
   quality = 'balanced',
   resolution = 'original',
@@ -161,6 +218,22 @@ async function exportVideo({
   onProgress,
 }) {
   const vf = scaleFilter(resolution);
+
+  // ---- Resolve the audio plan from the clips + their source files ----------
+  // The canvas-rendered video already carries every visual (zoom, webcam,
+  // transitions, multi-source frames); here we only rebuild the soundtrack.
+  // Each clip pulls audio from its own source, trimmed to its range, and the
+  // segments are concatenated in edit order so audio tracks the cut video.
+  const recPath = recordingSourceId && sources[recordingSourceId] ? sources[recordingSourceId].path : null;
+  const recHasAudio = !!(recordingSourceId && sources[recordingSourceId] && sources[recordingSourceId].hasAudio);
+
+  // No clip list => unedited single recording: keep the original simple path.
+  const cutSegs = Array.isArray(clips) && clips.length ? clips : null;
+  // When every clip comes from the one recording source we can use the original
+  // recording-only filtergraph (one mic input, denoised once over the whole
+  // concatenated voice). Any imported clip — even a silent one whose gap must be
+  // preserved — forces the general multi-source path.
+  const pureRecording = !cutSegs || cutSegs.every((c) => c.sourceId === recordingSourceId);
 
   // ---- GIF: palette-based, silent ----
   if (format === 'gif') {
@@ -196,42 +269,39 @@ async function exportVideo({
     aEnc = audioEncoder(format, quality);
   }
 
-  const args = ['-y'];
   const clicks = clickSound && clickTimes.length ? clickTimes.slice(0, MAX_CLICKS) : [];
   const useClicks = clicks.length > 0;
+  const noiseChain = chains()[noiseProfile];
+
+  // Inputs: input 0 is always the rendered video; audio sources and the click
+  // sfx are appended as we discover we need them.
+  const args = ['-y', '-i', zoomedVideoPath];
+  let inputCount = 1;
+  const addInput = (p) => { args.push('-i', p); return inputCount++; };
+
+  // A single filtergraph covers video (scaling) and audio (cut + voice + clicks).
+  const parts = [`[0:v]${vf || 'null'}[vout]`];
+
   // The video is already cut + reordered by the renderer; here we rebuild the
-  // mic track from the same clips, in the same edit order, so it stays in sync.
-  const cutSegs = Array.isArray(clips) && clips.length ? clips : null;
-  const needAudioCut = !!(cutSegs && hasAudio);
-  const useComplex = useClicks || needAudioCut;
-
-  // Input 0: rendered video. Input 1 (optional): original recording for audio.
-  // Input 2 (optional): the click sfx.
-  args.push('-i', zoomedVideoPath);
-  if (hasAudio) args.push('-i', originalPath);
-  if (useClicks) args.push('-i', clickSfxFile(clickSoundName));
-
-  if (useComplex) {
-    // One filtergraph covering video (scaling) and audio (cut + voice + clicks).
-    const parts = [];
-    parts.push(`[0:v]${vf || 'null'}[vout]`);
-
-    // Build the cleaned voice track. When the timeline was edited, rebuild the
-    // mic from the clips (atrim each source range + concat in edit order) before
-    // the noise chain, so removed parts vanish and reordered parts follow.
-    let voiceLabel = null;
-    if (hasAudio) {
-      let src = '[1:a]';
-      if (needAudioCut) {
+  // soundtrack from the same clips, in the same edit order, so it stays in sync.
+  // Two layouts:
+  //   mono   — the pure-recording path (the common case): one mic input, denoised
+  //            once over the whole concatenated voice (unchanged from before).
+  //   stereo — the mixed-source path: each clip pulls audio from its own source.
+  let voiceLabel = null;
+  let chLayout = 'mono';
+  if (pureRecording) {
+    if (recHasAudio) {
+      const recIdx = addInput(recPath);
+      let src = `[${recIdx}:a]`;
+      if (cutSegs) {
         const n = cutSegs.length;
-        // A filter input pad can only be consumed once, so fan the mic out into
-        // one copy per clip before trimming (mirrors the click asplit below).
         const ins = [];
         if (n === 1) {
-          ins.push('[1:a]');
+          ins.push(`[${recIdx}:a]`);
         } else {
           const splitOuts = cutSegs.map((_, i) => `[m${i}]`).join('');
-          parts.push(`[1:a]asplit=${n}${splitOuts}`);
+          parts.push(`[${recIdx}:a]asplit=${n}${splitOuts}`);
           for (let i = 0; i < n; i++) ins.push(`[m${i}]`);
         }
         const labels = [];
@@ -242,53 +312,41 @@ async function exportVideo({
         parts.push(`${labels.join('')}concat=n=${n}:v=0:a=1[vcut]`);
         src = '[vcut]';
       }
-      const chain = chains()[noiseProfile];
-      const voiceChain = chain ? chain : 'aformat=sample_rates=48000:channel_layouts=mono';
+      const voiceChain = noiseChain ? noiseChain : 'aformat=sample_rates=48000:channel_layouts=mono';
       parts.push(`${src}${voiceChain}[voice]`);
       voiceLabel = '[voice]';
     }
-
-    if (useClicks) {
-      const clickIdx = hasAudio ? 2 : 1;
-      const mixIns = [];
-      const dur = durationSec > 0 ? durationSec.toFixed(3) : 3600;
-      parts.push(`anullsrc=r=48000:cl=mono:d=${dur}[base]`);
-      mixIns.push('[base]');
-      if (voiceLabel) mixIns.push(voiceLabel);
-
-      const splitOuts = clicks.map((_, i) => `[c${i}]`).join('');
-      parts.push(`[${clickIdx}:a]asplit=${clicks.length}${splitOuts}`);
-      clicks.forEach((tc, i) => {
-        const ms = Math.max(0, Math.round(tc * 1000));
-        const vol = Math.max(0, Math.min(2, clickVolume)).toFixed(2);
-        parts.push(`[c${i}]adelay=${ms}|${ms},volume=${vol}[cd${i}]`);
-        mixIns.push(`[cd${i}]`);
-      });
-      parts.push(`${mixIns.join('')}amix=inputs=${mixIns.length}:normalize=0:dropout_transition=0[aout]`);
-
-      args.push('-filter_complex', parts.join(';'));
-      args.push('-map', '[vout]', '-map', '[aout]');
-      args.push(...vEnc, ...aEnc);
-    } else {
-      // Trimmed video + cleaned (cut) voice, no click mixing.
-      args.push('-filter_complex', parts.join(';'));
-      args.push('-map', '[vout]');
-      args.push(...vEnc);
-      if (voiceLabel) args.push('-map', voiceLabel, ...aEnc);
-      else args.push('-an');
-    }
   } else {
-    args.push('-map', '0:v:0');
-    if (vf) args.push('-vf', vf);
-    args.push(...vEnc);
-    if (hasAudio) {
-      args.push('-map', '1:a:0');
-      const chain = chains()[noiseProfile];
-      if (chain) args.push('-af', chain);
-      args.push(...aEnc);
-    } else {
-      args.push('-an');
-    }
+    chLayout = 'stereo';
+    voiceLabel = buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourceId, noiseChain);
+  }
+
+  if (useClicks) {
+    const clickIdx = addInput(clickSfxFile(clickSoundName));
+    const mixIns = [];
+    const dur = durationSec > 0 ? durationSec.toFixed(3) : 3600;
+    parts.push(`anullsrc=r=48000:cl=${chLayout}:d=${dur}[base]`);
+    mixIns.push('[base]');
+    if (voiceLabel) mixIns.push(voiceLabel);
+
+    const splitOuts = clicks.map((_, i) => `[c${i}]`).join('');
+    parts.push(`[${clickIdx}:a]asplit=${clicks.length}${splitOuts}`);
+    clicks.forEach((tc, i) => {
+      const ms = Math.max(0, Math.round(tc * 1000));
+      const vol = Math.max(0, Math.min(2, clickVolume)).toFixed(2);
+      parts.push(`[c${i}]adelay=${ms}|${ms},volume=${vol},aformat=sample_rates=48000:channel_layouts=${chLayout}[cd${i}]`);
+      mixIns.push(`[cd${i}]`);
+    });
+    parts.push(`${mixIns.join('')}amix=inputs=${mixIns.length}:normalize=0:dropout_transition=0[aout]`);
+
+    args.push('-filter_complex', parts.join(';'));
+    args.push('-map', '[vout]', '-map', '[aout]', ...vEnc, ...aEnc);
+  } else if (voiceLabel) {
+    args.push('-filter_complex', parts.join(';'));
+    args.push('-map', '[vout]', ...vEnc, '-map', voiceLabel, ...aEnc);
+  } else {
+    args.push('-filter_complex', parts.join(';'));
+    args.push('-map', '[vout]', ...vEnc, '-an');
   }
 
   // Force constant frame rate so the intermediate (captured at the monitor's

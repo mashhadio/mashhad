@@ -29,6 +29,10 @@ contextBridge.exposeInMainWorld('api', {
   listRecordings: () => ipcRenderer.invoke('recordings:list'),
   openRecording: (videoPath) => ipcRenderer.invoke('recordings:open', videoPath),
 
+  // studio (open the editor with a blank timeline + import media)
+  openStudio: () => ipcRenderer.invoke('studio:open'),
+  importVideos: () => ipcRenderer.invoke('source:import'),
+
   // editor
   getProject: () => ipcRenderer.invoke('project:get'),
   previewAudio: (profile) => ipcRenderer.invoke('audio:preview', profile),

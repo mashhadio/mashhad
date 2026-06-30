@@ -84,6 +84,18 @@ if (!app.requestSingleInstanceLock()) {
 // The project currently loaded in the editor.
 let currentProject = null; // { videoPath, cursorPath, hasAudio, display, recBaseEpoch }
 
+// Timeline media sources keyed by id. The editor's clips reference these by id;
+// export resolves each clip's audio back to a file here. The recording (when the
+// editor was opened from one) is registered as id 'rec'; imported videos get
+// ids like 'imp_1'. Reset whenever a fresh editor session is opened.
+let mediaSources = {}; // id -> { path, hasAudio, kind: 'recording' | 'import' }
+let importSeq = 1;
+
+function resetMediaSources() {
+  mediaSources = {};
+  importSeq = 1;
+}
+
 // ---------------------------------------------------------------------------
 // Window
 // ---------------------------------------------------------------------------
@@ -373,8 +385,43 @@ ipcMain.handle('rec:abort', async () => {
 });
 
 ipcMain.handle('editor:open', async () => {
+  resetMediaSources();
   loadEditor();
   return { ok: true };
+});
+
+// Open the studio with no recording — a blank timeline the user fills by
+// importing videos.
+ipcMain.handle('studio:open', async () => {
+  currentProject = null;
+  resetMediaSources();
+  loadEditor();
+  return { ok: true };
+});
+
+// Let the user pick one or more video files to add to the timeline. Each becomes
+// a registered media source; the editor creates a clip per file.
+ipcMain.handle('source:import', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: 'إضافة فيديو',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'ملفات الفيديو', extensions: ['mp4', 'mov', 'webm', 'mkv', 'm4v', 'avi'] },
+      { name: 'كل الملفات', extensions: ['*'] },
+    ],
+  });
+  if (canceled || !filePaths.length) return [];
+
+  const out = [];
+  for (const p of filePaths) {
+    if (!fs.existsSync(p)) continue;
+    const id = `imp_${importSeq++}`;
+    let hasAudio = false;
+    try { hasAudio = await probeHasAudio(p); } catch (_) {}
+    mediaSources[id] = { path: p, hasAudio, kind: 'import' };
+    out.push({ id, url: pathToFileUrl(p), name: path.basename(p), hasAudio });
+  }
+  return out;
 });
 
 // List previously saved recordings (newest first).
@@ -420,6 +467,7 @@ ipcMain.handle('recordings:open', async (_evt, videoPath) => {
   const hasCam = fs.existsSync(camPath);
   currentProject = { videoPath, cursorPath, camPath: hasCam ? camPath : null, hasAudio, hasCam, display: meta.display, recBaseEpoch: meta.recBaseEpoch };
 
+  resetMediaSources();
   loadEditor();
   return { ok: true };
 });
@@ -433,16 +481,21 @@ ipcMain.handle('editor:back-home', async () => {
 // IPC: editor data
 // ---------------------------------------------------------------------------
 ipcMain.handle('project:get', async () => {
-  if (!currentProject) return null;
+  if (!currentProject) return { recording: null };
   const cursor = JSON.parse(fs.readFileSync(currentProject.cursorPath, 'utf8'));
+  // Register the recording as the timeline's first media source.
+  mediaSources.rec = { path: currentProject.videoPath, hasAudio: currentProject.hasAudio, kind: 'recording' };
   return {
-    videoUrl: pathToFileUrl(currentProject.videoPath),
-    videoPath: currentProject.videoPath,
-    camUrl: currentProject.camPath ? pathToFileUrl(currentProject.camPath) : null,
-    hasAudio: currentProject.hasAudio,
-    hasCam: currentProject.hasCam,
-    display: currentProject.display,
-    cursor,
+    recording: {
+      id: 'rec',
+      videoUrl: pathToFileUrl(currentProject.videoPath),
+      videoPath: currentProject.videoPath,
+      camUrl: currentProject.camPath ? pathToFileUrl(currentProject.camPath) : null,
+      hasAudio: currentProject.hasAudio,
+      hasCam: currentProject.hasCam,
+      display: currentProject.display,
+      cursor,
+    },
   };
 });
 
@@ -456,8 +509,6 @@ function pathToFileUrl(p) {
 // IPC: export
 // ---------------------------------------------------------------------------
 ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
-  if (!currentProject) throw new Error('لم يُحمَّل أي مشروع');
-
   const tmpZoomed = path.join(os.tmpdir(), `ssr-zoomed-${Date.now()}.webm`);
   fs.writeFileSync(tmpZoomed, Buffer.from(zoomedBuffer));
 
@@ -471,7 +522,10 @@ ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
     gif: { name: 'GIF متحرك', extensions: ['gif'] },
   };
   const filter = FILTERS[format] || FILTERS.mp4;
-  const defaultName = path.basename(currentProject.videoPath).replace(/\.webm$/, `.${filter.extensions[0]}`);
+  const baseName = currentProject
+    ? path.basename(currentProject.videoPath).replace(/\.webm$/, '')
+    : 'mashhad-export';
+  const defaultName = `${baseName}.${filter.extensions[0]}`;
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
     title: 'تصدير الفيديو',
     defaultPath: path.join(RECORDINGS_DIR, defaultName),
@@ -483,18 +537,27 @@ ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
     return { canceled: true };
   }
 
+  // Resolve each clip's audio back to a registered source file. Clips that
+  // reference an unknown/missing source are treated as silent.
+  const clips = Array.isArray(options.clips) ? options.clips : null;
+  const sourceInfo = {};
+  for (const id of Object.keys(mediaSources)) {
+    const s = mediaSources[id];
+    sourceInfo[id] = { path: s.path, hasAudio: s.hasAudio, kind: s.kind };
+  }
+
   try {
     await exportVideo({
       zoomedVideoPath: tmpZoomed,
-      originalPath: currentProject.videoPath,
-      hasAudio: currentProject.hasAudio,
+      clips,
+      sources: sourceInfo,
+      recordingSourceId: mediaSources.rec ? 'rec' : null,
       noiseProfile: options.noiseProfile,
       clickSound: options.clickSound,
       clickTimes: options.clickTimes || [],
       clickSoundName: options.clickSoundName || 'mouse',
       clickVolume: options.clickVolume != null ? options.clickVolume : 0.7,
       durationSec: options.durationSec || 0,
-      clips: options.clips || null,
       format,
       quality: options.quality || 'balanced',
       resolution: options.resolution || 'original',

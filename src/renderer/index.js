@@ -9,6 +9,11 @@ const micEnabled = document.getElementById('micEnabled');
 const camSelect = document.getElementById('camSelect');
 const camEnabled = document.getElementById('camEnabled');
 const fpsSelect = document.getElementById('fpsSelect');
+const qualitySelect = document.getElementById('qualitySelect');
+const perfGuideIcon = document.getElementById('perfGuideIcon');
+const perfGuideTitle = document.getElementById('perfGuideTitle');
+const perfGuideBody = document.getElementById('perfGuideBody');
+const perfGuideMeter = document.getElementById('perfGuideMeter');
 const recordBtn = document.getElementById('recordBtn');
 const stopBtn = document.getElementById('stopBtn');
 const recBanner = document.getElementById('recBanner');
@@ -48,6 +53,83 @@ function queueChunk(blob, sender) {
   writeQueue = p.catch(() => {});
   pendingWrites.push(p);
 }
+// Recording-quality presets. Each trades CPU load against file quality:
+//  - bpp: bits-per-pixel-per-frame; the encoder bitrate is derived from this
+//    times the actual capture resolution × fps, so small/low-fps captures stay
+//    light instead of always paying a flat bitrate.
+//  - codecs: preference order. VP8 encodes far cheaper than VP9 in software
+//    (Chromium has no GPU path for MediaRecorder VP9), so "performance" picks
+//    VP8; "high" picks VP9 for better quality-per-bit. Both stay in the webm
+//    container, so the editor and ffmpeg pipeline are unaffected.
+//  - load: a rough 0..1 CPU-cost weight used only to drive the guide meter.
+const QUALITY_PRESETS = {
+  performance: {
+    bpp: 0.05,
+    codecs: ['vp8', 'vp9'],
+    load: 0.34,
+    icon: '🍃',
+    title: 'الأداء — مناسب للأجهزة الضعيفة',
+    body: 'يستخدم ضغط VP8 الأخف على المعالج ومعدّل بِت أقل، فيقلّل احتمال تقطيع أو فقدان الإطارات أثناء التسجيل. الأفضل مع الأجهزة ذات المعالج الضعيف أو الذاكرة المحدودة. الحجم أصغر والجودة جيدة لكن أقل حدّة.',
+  },
+  balanced: {
+    bpp: 0.08,
+    codecs: ['vp9', 'vp8'],
+    load: 0.6,
+    icon: '⚖️',
+    title: 'متوازن — الخيار الافتراضي',
+    body: 'توازن بين الجودة وحِمل المعالج باستخدام ضغط VP9 ومعدّل بِت متوسط. مناسب لمعظم الأجهزة الحديثة. قد يسبب بعض التقطيع على الأجهزة الضعيفة جدًا عند 60 إطار/ث.',
+  },
+  high: {
+    bpp: 0.12,
+    codecs: ['vp9'],
+    load: 0.9,
+    icon: '💎',
+    title: 'جودة عالية — يتطلب جهازًا قويًا',
+    body: 'أعلى جودة ووضوح بمعدّل بِت مرتفع وضغط VP9، لكنه يحمّل المعالج بشدة وقد يسبب تقطيعًا وفقدانًا للإطارات على الأجهزة الضعيفة. استخدمه فقط مع معالج قوي. الملفات أكبر حجمًا.',
+  },
+};
+
+function currentPreset() {
+  return QUALITY_PRESETS[qualitySelect.value] || QUALITY_PRESETS.balanced;
+}
+
+// Choose a MediaRecorder mime + bitrate from the active preset and the real
+// capture size, falling back across the preset's codec list to whatever the
+// platform actually supports.
+function pickVideoConfig(preset, fps, width, height, withAudio) {
+  let mime = 'video/webm';
+  for (const c of preset.codecs) {
+    const candidate = withAudio
+      ? `video/webm;codecs=${c},opus`
+      : `video/webm;codecs=${c}`;
+    if (MediaRecorder.isTypeSupported(candidate)) { mime = candidate; break; }
+  }
+  const pixels = Math.max(1, width * height);
+  const raw = pixels * fps * preset.bpp;
+  // Clamp to a sane window so tiny regions still look OK and 4K60 stays bounded.
+  const bitrate = Math.round(Math.min(40_000_000, Math.max(1_500_000, raw)));
+  return { mime, bitrate };
+}
+
+// Update the guide card whenever the preset or fps changes. The meter combines
+// the preset's base load with an fps multiplier: doubling the frame rate roughly
+// doubles the per-second encoding work, so 60fps is weighted ~1.5× here.
+function renderPerfGuide() {
+  const p = currentPreset();
+  const fps = parseInt(fpsSelect.value, 10) || 30;
+  perfGuideIcon.textContent = p.icon;
+  perfGuideTitle.textContent = p.title;
+  let body = p.body;
+  if (fps >= 60) {
+    body += ' — ملاحظة: 60 إطار/ث يرفع الحِمل على المعالج بشكل كبير؛ اختر 30 إطار/ث على الأجهزة الضعيفة.';
+  }
+  perfGuideBody.textContent = body;
+  const load = Math.min(1, p.load * (fps >= 60 ? 1.5 : 1));
+  perfGuideMeter.style.setProperty('--load', Math.round(load * 100) + '%');
+  const color = load < 0.45 ? 'var(--accent)' : load < 0.75 ? '#e0b341' : '#e0594b';
+  perfGuideMeter.style.setProperty('--load-color', color);
+}
+
 let recState = null; // { display, recBaseEpoch, hasAudio, hasCam }
 let timerInt = null;
 let streams = [];
@@ -414,12 +496,19 @@ async function startRegionCrop(fullStream, display, region, fps) {
 
   let raf = 0;
   let stopped = false;
-  const draw = () => {
+  // rAF fires at the monitor's refresh rate (often 60Hz). Throttle the redraw to
+  // the requested fps so we don't burn CPU compositing frames the encoder will
+  // never use — a real saving on low-spec machines recording at 30fps.
+  const minInterval = 1000 / (fps + 0.5);
+  let last = -Infinity;
+  const draw = (now) => {
     if (stopped) return;
-    cctx.drawImage(srcVideo, cx, cy, cw, ch, 0, 0, cw, ch);
     raf = requestAnimationFrame(draw);
+    if (now - last < minInterval) return;
+    last = now;
+    cctx.drawImage(srcVideo, cx, cy, cw, ch, 0, 0, cw, ch);
   };
-  draw();
+  raf = requestAnimationFrame(draw);
 
   cropCtl = {
     stop() {
@@ -447,6 +536,7 @@ async function startRecording() {
   const display = selectedSource.display;
   const kind = selectedSource.kind || 'screen';
   const fps = parseInt(fpsSelect.value, 10);
+  const preset = currentPreset();
   const useMic = micEnabled.checked && !micEnabled.disabled;
   // Region recording only applies to full-screen sources.
   const region = kind !== 'window' ? selectedRegion : null;
@@ -519,10 +609,13 @@ async function startRecording() {
         if (!camPreviewOn) await startCamPreview();
         const camStream = camProcessor.getStream(30);
         streams.push(camStream);
-        const camMime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-          ? 'video/webm;codecs=vp9'
-          : 'video/webm;codecs=vp8';
-        camRecorder = new MediaRecorder(camStream, { mimeType: camMime, videoBitsPerSecond: 6_000_000 });
+        // Webcam runs a second concurrent encoder — let it follow the same
+        // preset so "performance" mode lightens this too (VP8 + lower bitrate).
+        const camTrack = camStream.getVideoTracks()[0]?.getSettings?.() || {};
+        const camCfg = pickVideoConfig(
+          preset, 30, camTrack.width || 1280, camTrack.height || 720, false);
+        camRecorder = new MediaRecorder(camStream, {
+          mimeType: camCfg.mime, videoBitsPerSecond: camCfg.bitrate });
         camRecorder.ondataavailable = (e) => {
           if (e.data.size) queueChunk(e.data, window.api.sendCamChunk);
         };
@@ -533,10 +626,14 @@ async function startRecording() {
     }
 
     const combined = new MediaStream(tracks);
-    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
-      ? 'video/webm;codecs=vp9,opus'
-      : 'video/webm';
-    mediaRecorder = new MediaRecorder(combined, { mimeType: mime, videoBitsPerSecond: 12_000_000 });
+    // Derive bitrate from the real capture size so the encoder isn't overworked
+    // on small captures. Track settings are most accurate; fall back to the
+    // display's pixel bounds if the platform doesn't report them.
+    const vs = captureStream.getVideoTracks()[0]?.getSettings?.() || {};
+    const capW = vs.width || Math.round(display.bounds.width * (display.scaleFactor || 1));
+    const capH = vs.height || Math.round(display.bounds.height * (display.scaleFactor || 1));
+    const { mime, bitrate } = pickVideoConfig(preset, fps, capW, capH, hasAudio);
+    mediaRecorder = new MediaRecorder(combined, { mimeType: mime, videoBitsPerSecond: bitrate });
     mediaRecorder.ondataavailable = (e) => {
       if (e.data.size) queueChunk(e.data, window.api.sendVideoChunk);
     };
@@ -659,6 +756,15 @@ if (window.api.getShortcut) {
   });
 }
 
+// Open the studio with a blank timeline to import and edit existing videos.
+const openStudioBtn = document.getElementById('openStudioBtn');
+if (openStudioBtn) {
+  openStudioBtn.addEventListener('click', async () => {
+    topStatus.textContent = 'جارٍ فتح الاستوديو…';
+    await window.api.openStudio();
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Library of past recordings
 // ---------------------------------------------------------------------------
@@ -701,6 +807,8 @@ async function loadLibrary() {
 // Apply saved preferences to the home-screen controls and persist on change.
 function applyHomePrefs() {
   fpsSelect.value = String(Prefs.get('fps', fpsSelect.value));
+  qualitySelect.value = Prefs.get('quality', qualitySelect.value);
+  renderPerfGuide();
   if (!micEnabled.disabled) micEnabled.checked = Prefs.get('micEnabled', true);
 
   const md = Prefs.get('micDevice');
@@ -720,7 +828,8 @@ function applyHomePrefs() {
   if (camEnabled.checked) startCamPreview();
 
   // Persist on change (these add to existing handlers).
-  fpsSelect.addEventListener('change', () => Prefs.set('fps', fpsSelect.value));
+  fpsSelect.addEventListener('change', () => { Prefs.set('fps', fpsSelect.value); renderPerfGuide(); });
+  qualitySelect.addEventListener('change', () => { Prefs.set('quality', qualitySelect.value); renderPerfGuide(); });
   micEnabled.addEventListener('change', () => Prefs.set('micEnabled', micEnabled.checked));
   micSelect.addEventListener('change', () => Prefs.set('micDevice', micSelect.value));
   camEnabled.addEventListener('change', () => Prefs.set('camEnabled', camEnabled.checked));
