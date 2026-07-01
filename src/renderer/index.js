@@ -10,6 +10,7 @@ const camSelect = document.getElementById('camSelect');
 const camEnabled = document.getElementById('camEnabled');
 const fpsSelect = document.getElementById('fpsSelect');
 const qualitySelect = document.getElementById('qualitySelect');
+const formatSelect = document.getElementById('formatSelect');
 const perfGuideIcon = document.getElementById('perfGuideIcon');
 const perfGuideTitle = document.getElementById('perfGuideTitle');
 const perfGuideBody = document.getElementById('perfGuideBody');
@@ -91,6 +92,36 @@ const QUALITY_PRESETS = {
 
 function currentPreset() {
   return QUALITY_PRESETS[qualitySelect.value] || QUALITY_PRESETS.balanced;
+}
+
+// Output-format presets for social platforms. `aspect` (w/h) locks the
+// region-select box to that shape; `out` is the standard pixel resolution the
+// cropped region is scaled to so the file matches what the platform expects.
+// `original` keeps the legacy behaviour: free-form region, native crop size.
+const FORMAT_PRESETS = {
+  original: { aspect: null, out: null, label: 'الأصلية' },
+  youtube:  { aspect: 16 / 9, out: { w: 1920, h: 1080 }, label: 'يوتيوب 16:9' },
+  shorts:   { aspect: 9 / 16, out: { w: 1080, h: 1920 }, label: 'شورتس 9:16' },
+  square:   { aspect: 1,      out: { w: 1080, h: 1080 }, label: 'مربّع 1:1' },
+  portrait: { aspect: 4 / 5,  out: { w: 1080, h: 1350 }, label: 'عمودي 4:5' },
+};
+
+function currentFormat() {
+  return FORMAT_PRESETS[formatSelect.value] || FORMAT_PRESETS.original;
+}
+
+// Largest rectangle of the given aspect (w/h) centered within `bounds` (DIP).
+// Used when a platform format is chosen but the user hasn't drawn a region.
+function fitAspectRegion(bounds, aspect) {
+  let w = bounds.width;
+  let h = w / aspect;
+  if (h > bounds.height) { h = bounds.height; w = h * aspect; }
+  return {
+    x: Math.round((bounds.width - w) / 2),
+    y: Math.round((bounds.height - h) / 2),
+    w: Math.round(w),
+    h: Math.round(h),
+  };
 }
 
 // Choose a MediaRecorder mime + bitrate from the active preset and the real
@@ -240,26 +271,47 @@ function canSelectArea() {
   return !!selectedSource && (selectedSource.kind || 'screen') === 'screen';
 }
 
+// The rectangle that will actually be recorded: an explicitly drawn region, or
+// — when a platform format is active with no region drawn — the largest centered
+// box of that aspect. Null means "record the whole source".
+function effectiveRegion() {
+  if (!canSelectArea()) return null;
+  if (selectedRegion) return selectedRegion;
+  const fmt = currentFormat();
+  if (fmt.aspect) return fitAspectRegion(selectedSource.display.bounds, fmt.aspect);
+  return null;
+}
+
 function updateAreaUI() {
   const enabled = canSelectArea();
+  const fmt = currentFormat();
   selectAreaBtn.disabled = !enabled;
+  // Aspect crop needs a screen source; windows are recorded at their own size.
+  formatSelect.disabled = !enabled;
+  formatSelect.title = enabled ? '' : 'نسب المنصّات متاحة لمصادر الشاشة الكاملة فقط';
   selectAreaBtn.title = enabled
-    ? 'اسحب لتسجيل جزء من الشاشة فقط'
+    ? (fmt.aspect ? `اسحب لتحديد منطقة بنسبة ${fmt.label}` : 'اسحب لتسجيل جزء من الشاشة فقط')
     : 'تحديد المنطقة متاح فقط لمصادر الشاشة الكاملة';
+
   if (selectedRegion && enabled) {
     regionChip.style.display = 'inline-flex';
-    regionChipText.textContent = `${selectedRegion.w} × ${selectedRegion.h}`;
+    regionChipText.textContent = fmt.out
+      ? `${selectedRegion.w} × ${selectedRegion.h} → ${fmt.out.w}×${fmt.out.h}`
+      : `${selectedRegion.w} × ${selectedRegion.h}`;
     selectAreaBtn.textContent = '⬚ تغيير المنطقة…';
   } else {
     regionChip.style.display = 'none';
-    selectAreaBtn.textContent = '⬚ تحديد منطقة…';
+    // With a platform format and no manual region we auto-fit the whole display,
+    // so tell the user what that produces rather than leaving the button bare.
+    selectAreaBtn.textContent = fmt.aspect && enabled ? '⬚ تحديد منطقة (أو الشاشة كاملة)…' : '⬚ تحديد منطقة…';
   }
   updateRegionOutline();
 }
 
 // Draw the chosen region as an outline over the contained (letterboxed) preview.
 function updateRegionOutline() {
-  if (!selectedRegion || !canSelectArea()) {
+  const r = effectiveRegion();
+  if (!r || !canSelectArea()) {
     regionOutline.style.display = 'none';
     return;
   }
@@ -275,7 +327,6 @@ function updateRegionOutline() {
   } else {
     vh = sh; vw = sh * dispAspect; oy = 0; ox = (sw - vw) / 2;
   }
-  const r = selectedRegion;
   regionOutline.style.display = 'block';
   regionOutline.style.left = ox + (r.x / b.width) * vw + 'px';
   regionOutline.style.top = oy + (r.y / b.height) * vh + 'px';
@@ -287,7 +338,10 @@ async function pickArea() {
   if (!canSelectArea()) return;
   let rect = null;
   try {
-    rect = await window.api.selectRegion({ display: selectedSource.display });
+    rect = await window.api.selectRegion({
+      display: selectedSource.display,
+      aspect: currentFormat().aspect, // locks the drag box when a platform is chosen
+    });
   } catch (err) {
     console.warn('Area selection failed:', err.message);
   }
@@ -297,6 +351,13 @@ async function pickArea() {
 
 selectAreaBtn.addEventListener('click', pickArea);
 regionClear.addEventListener('click', () => { selectedRegion = null; updateAreaUI(); });
+
+// Switching the target aspect invalidates any region drawn for the old shape.
+formatSelect.addEventListener('change', () => {
+  Prefs.set('format', formatSelect.value);
+  selectedRegion = null;
+  updateAreaUI();
+});
 window.addEventListener('resize', updateRegionOutline);
 
 // ---------------------------------------------------------------------------
@@ -464,12 +525,14 @@ function teardownStreams() {
   if (cropCtl) { try { cropCtl.stop(); } catch (_) {} cropCtl = null; }
   streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
   streams = [];
+  // Remove the on-screen recording outline (no-op if none is showing).
+  try { window.api.hideRecFrame(); } catch (_) {}
 }
 
 // desktopCapturer can only grab a whole screen, so to "record an area" we draw
 // the chosen sub-rectangle of the full capture into a canvas every frame and
 // record the canvas's stream instead. Returns the cropped MediaStream.
-async function startRegionCrop(fullStream, display, region, fps) {
+async function startRegionCrop(fullStream, display, region, fps, outSize) {
   const srcVideo = document.createElement('video');
   srcVideo.srcObject = fullStream;
   srcVideo.muted = true;
@@ -489,9 +552,14 @@ async function startRegionCrop(fullStream, display, region, fps) {
   const cw = Math.max(2, Math.min(Math.round(region.w * sx), srcVideo.videoWidth - cx)) & ~1;
   const ch = Math.max(2, Math.min(Math.round(region.h * sy), srcVideo.videoHeight - cy)) & ~1;
 
+  // Without a target size the canvas matches the native crop; a platform format
+  // scales the crop to its standard resolution instead. Keep dims even-sized.
+  const outW = outSize ? (Math.max(2, Math.round(outSize.w)) & ~1) : cw;
+  const outH = outSize ? (Math.max(2, Math.round(outSize.h)) & ~1) : ch;
+
   const canvas = document.createElement('canvas');
-  canvas.width = cw;
-  canvas.height = ch;
+  canvas.width = outW;
+  canvas.height = outH;
   const cctx = canvas.getContext('2d', { alpha: false });
 
   let raf = 0;
@@ -506,7 +574,7 @@ async function startRegionCrop(fullStream, display, region, fps) {
     raf = requestAnimationFrame(draw);
     if (now - last < minInterval) return;
     last = now;
-    cctx.drawImage(srcVideo, cx, cy, cw, ch, 0, 0, cw, ch);
+    cctx.drawImage(srcVideo, cx, cy, cw, ch, 0, 0, outW, outH);
   };
   raf = requestAnimationFrame(draw);
 
@@ -538,8 +606,14 @@ async function startRecording() {
   const fps = parseInt(fpsSelect.value, 10);
   const preset = currentPreset();
   const useMic = micEnabled.checked && !micEnabled.disabled;
-  // Region recording only applies to full-screen sources.
-  const region = kind !== 'window' ? selectedRegion : null;
+  // Region recording only applies to full-screen sources. effectiveRegion()
+  // returns null for windows and, for a platform format with no manual region,
+  // auto-fits the largest box of that aspect to the display.
+  const fmt = currentFormat();
+  const region = effectiveRegion();
+  // Scale the cropped region to the platform's standard resolution (e.g.
+  // 1920×1080) so the saved file matches what YouTube/LinkedIn expect.
+  const outSize = region ? fmt.out : null;
 
   let recBaseEpoch;
   try {
@@ -569,7 +643,7 @@ async function startRecording() {
     // the whole screen, so the saved file contains only the chosen area.
     let captureStream = fullStream;
     if (region) {
-      captureStream = await startRegionCrop(fullStream, display, region, fps);
+      captureStream = await startRegionCrop(fullStream, display, region, fps, outSize);
       streams.push(captureStream);
     }
 
@@ -651,6 +725,12 @@ async function startRecording() {
     recordBtn.style.display = 'none'; // the live indicator + stop take over while recording
     recordBtn.textContent = '● جارٍ التسجيل…';
     startTimer(recBaseEpoch);
+
+    // Draw the click-through outline around the captured area so the user can
+    // see what's being recorded. Only meaningful for region/format captures.
+    if (region) {
+      try { await window.api.showRecFrame({ display, region }); } catch (_) {}
+    }
   } catch (err) {
     // Capture failed or was cancelled — clean up so nothing is left running.
     console.error('Failed to start recording:', err);
@@ -808,6 +888,8 @@ async function loadLibrary() {
 function applyHomePrefs() {
   fpsSelect.value = String(Prefs.get('fps', fpsSelect.value));
   qualitySelect.value = Prefs.get('quality', qualitySelect.value);
+  formatSelect.value = Prefs.get('format', formatSelect.value);
+  updateAreaUI(); // reflect the restored format in the region preview
   renderPerfGuide();
   if (!micEnabled.disabled) micEnabled.checked = Prefs.get('micEnabled', true);
 

@@ -143,7 +143,7 @@ function loadEditor() {
 // Opens a transparent overlay covering the given display and resolves with the
 // chosen rectangle { x, y, w, h } in DIP relative to that display's top-left, or
 // null if the user cancels.
-function selectRegion(display) {
+function selectRegion(display, aspect) {
   return new Promise((resolve) => {
     const b = display.bounds;
     const overlay = new BrowserWindow({
@@ -188,15 +188,79 @@ function selectRegion(display) {
     ipcMain.on('region:result', onResult);
     overlay.on('closed', () => finish(null)); // covers Cmd+W / focus-loss closes
 
-    overlay.loadFile(path.join(__dirname, '..', 'renderer', 'region-overlay.html'));
+    // Pass the locked aspect (w/h) to the overlay so it can constrain the drag.
+    const query = aspect ? { aspect: String(aspect) } : undefined;
+    overlay.loadFile(path.join(__dirname, '..', 'renderer', 'region-overlay.html'), { query });
     overlay.focus();
   });
 }
 
-ipcMain.handle('region:select', async (_evt, { display }) => {
+ipcMain.handle('region:select', async (_evt, { display, aspect }) => {
   if (!display || !display.bounds) return null;
-  return selectRegion(display);
+  return selectRegion(display, aspect);
 });
+
+// ---------------------------------------------------------------------------
+// Recording frame: a click-through outline drawn around the captured region
+// while recording, so the user can see exactly what is being recorded. It is
+// excluded from the screen capture itself via setContentProtection (Windows:
+// WDA_EXCLUDEFROMCAPTURE, macOS: NSWindowSharingNone), and the border is drawn
+// just outside the crop as a second line of defence, so it never lands in the
+// saved video.
+// ---------------------------------------------------------------------------
+let recFrameWin = null;
+
+function showRecFrame(display, region) {
+  hideRecFrame();
+  const b = display.bounds;
+  const win = new BrowserWindow({
+    x: b.x,
+    y: b.y,
+    width: b.width,
+    height: b.height,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    focusable: false, // never steals focus from the app being recorded
+    alwaysOnTop: true,
+    enableLargerThanScreen: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  win.setIgnoreMouseEvents(true); // clicks pass straight through to apps below
+  win.setContentProtection(true); // keep the outline out of the capture
+  win.setAlwaysOnTop(true, 'screen-saver');
+  if (isMac) win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreenWindows: true });
+  win.setBounds(b);
+
+  const query = {
+    x: String(region.x), y: String(region.y), w: String(region.w), h: String(region.h),
+  };
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'rec-frame.html'), { query });
+  win.on('closed', () => { if (recFrameWin === win) recFrameWin = null; });
+  recFrameWin = win;
+}
+
+function hideRecFrame() {
+  if (recFrameWin) {
+    try { if (!recFrameWin.isDestroyed()) recFrameWin.close(); } catch (_) {}
+    recFrameWin = null;
+  }
+}
+
+ipcMain.handle('frame:show', (_evt, { display, region } = {}) => {
+  if (display && display.bounds && region) showRecFrame(display, region);
+});
+ipcMain.handle('frame:hide', () => hideRecFrame());
 
 // ---------------------------------------------------------------------------
 // IPC: screen-recording permission (macOS)

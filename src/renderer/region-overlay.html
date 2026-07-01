@@ -27,7 +27,28 @@
       border: 1.5px solid #22d3ee;
       background: rgba(34, 211, 238, 0.08);
       box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.42);
+      cursor: move; /* drag inside the box to reposition it */
     }
+    /* Resize handles, one per edge + corner; positioned relative to #sel. */
+    .handle {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      background: #22d3ee;
+      border: 1.5px solid #04222a;
+      border-radius: 3px;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+    }
+    /* While drawing a fresh box the handles would just clutter the corner. */
+    #sel.drawing .handle { display: none; }
+    .h-nw { left: -6px; top: -6px; cursor: nwse-resize; }
+    .h-n  { left: calc(50% - 6px); top: -6px; cursor: ns-resize; }
+    .h-ne { right: -6px; top: -6px; cursor: nesw-resize; }
+    .h-e  { right: -6px; top: calc(50% - 6px); cursor: ew-resize; }
+    .h-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+    .h-s  { left: calc(50% - 6px); bottom: -6px; cursor: ns-resize; }
+    .h-sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+    .h-w  { left: -6px; top: calc(50% - 6px); cursor: ew-resize; }
     /* Live width × height readout that follows the selection. */
     #dims {
       position: fixed;

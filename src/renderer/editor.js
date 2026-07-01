@@ -21,6 +21,7 @@ const addZoomBtn = document.getElementById('addZoomBtn');
 const clearZoomBtn = document.getElementById('clearZoomBtn');
 const splitBtn = document.getElementById('splitBtn');
 const undoBtn = document.getElementById('undoBtn');
+const redoBtn = document.getElementById('redoBtn');
 const clipTransition = document.getElementById('clipTransition');
 const zoomLevel = document.getElementById('zoomLevel');
 const zoomLevelVal = document.getElementById('zoomLevelVal');
@@ -89,6 +90,7 @@ let clips = [];
 let selectedClipId = null;
 let clipSeq = 0;            // id generator so selection survives reorders
 let clipHistory = [];       // snapshots of `clips` for undo
+let clipFuture = [];        // snapshots of `clips` for redo
 let playIdx = 0;            // index of the clip currently at the playhead
 let playheadEdited = 0;     // playhead position in edited time (seconds)
 let drawClipIdx = 0;        // clip index the current frame belongs to
@@ -1299,20 +1301,25 @@ function selectClip(id) {
   buildTimeline();
 }
 
-// Snapshot for undo, taken before every mutating edit.
+// Snapshot for undo, taken before every mutating edit. A fresh edit
+// invalidates the redo stack.
 function pushHistory() {
   clipHistory.push(clips.map((c) => ({ ...c })));
   if (clipHistory.length > 100) clipHistory.shift();
+  clipFuture = [];
   updateUndoBtn();
 }
 
 function updateUndoBtn() {
   undoBtn.disabled = clipHistory.length === 0;
+  redoBtn.disabled = clipFuture.length === 0;
 }
 
-function undo() {
-  if (exporting || !clipHistory.length) return;
-  clips = clipHistory.pop();
+// Restore the snapshot popped from `from`, pushing the current state onto `to`.
+function restoreHistory(from, to) {
+  if (exporting || !from.length) return;
+  to.push(clips.map((c) => ({ ...c })));
+  clips = from.pop();
   if (!clips.some((c) => c.id === selectedClipId)) selectedClipId = null;
   updateUndoBtn();
   updateEmptyState();
@@ -1320,6 +1327,9 @@ function undo() {
   if (clips.length) seekEdited(clamp(playheadEdited, 0, editedDuration()));
   else { playheadEdited = 0; movePlayhead(0); updateTimeLabel(); }
 }
+
+function undo() { restoreHistory(clipHistory, clipFuture); }
+function redo() { restoreHistory(clipFuture, clipHistory); }
 
 function splitAtPlayhead() {
   if (exporting) return;
@@ -1371,6 +1381,7 @@ addZoomBtn.addEventListener('click', addZoomHere);
 clearZoomBtn.addEventListener('click', clearZoom);
 splitBtn.addEventListener('click', splitAtPlayhead);
 undoBtn.addEventListener('click', undo);
+redoBtn.addEventListener('click', redo);
 
 // Reflect the selected clip's intro transition in the picker.
 function updateTransitionControl() {
@@ -1417,7 +1428,8 @@ window.addEventListener('keydown', (e) => {
 });
 
 // Keyboard: Space plays/pauses, ←/→ seek; Delete removes the selected zoom or
-// clip; 'S' splits at the playhead; Ctrl/Cmd+Z undoes the last clip edit.
+// clip; 'S' splits at the playhead; Ctrl/Cmd+Z undoes and Ctrl/Cmd+Shift+Z
+// (or Ctrl/Cmd+Y) redoes the last clip edit.
 window.addEventListener('keydown', (e) => {
   if (exporting) return; // ignore edit shortcuts during an export
   if (shortcutsModal.classList.contains('open')) return; // modal owns the keyboard
@@ -1440,7 +1452,13 @@ window.addEventListener('keydown', (e) => {
 
   if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
     e.preventDefault();
-    undo();
+    e.shiftKey ? redo() : undo(); // Ctrl/Cmd+Shift+Z redoes
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+    e.preventDefault();
+    redo();
     return;
   }
 

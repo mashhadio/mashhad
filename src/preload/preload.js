@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('api', {
   // drag-to-select recording area; resolves { x, y, w, h } in DIP or null
   selectRegion: (payload) => ipcRenderer.invoke('region:select', payload),
 
+  // click-through outline drawn around the recorded region while recording
+  showRecFrame: (payload) => ipcRenderer.invoke('frame:show', payload),
+  hideRecFrame: () => ipcRenderer.invoke('frame:hide'),
+
   // recording (streamed to disk chunk-by-chunk)
   startRecording: (payload) => ipcRenderer.invoke('rec:start', payload),
   sendVideoChunk: (buf) => ipcRenderer.invoke('rec:videoChunk', buf),
