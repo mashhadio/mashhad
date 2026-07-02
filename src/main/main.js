@@ -127,11 +127,15 @@ function createWindow() {
   mainWindow.setMenuBarVisibility(false);
 
   // Disable Chromium's whole-app zoom so only the in-app timeline zoom applies:
-  // pinch/visual zoom off, and swallow the Ctrl/Cmd +/-/0 zoom accelerators.
-  mainWindow.webContents.setVisualZoomLevelLimits(1, 1);
-  mainWindow.webContents.on('before-input-event', (e, input) => {
+  // pinch/visual zoom off, swallow the Ctrl/Cmd +/-/0 accelerators, and hard-reset
+  // any page zoom that still slips through (Ctrl+wheel) back to 100%.
+  const wc = mainWindow.webContents;
+  wc.setVisualZoomLevelLimits(1, 1);
+  wc.on('before-input-event', (e, input) => {
     if ((input.control || input.meta) && ['=', '+', '-', '0'].includes(input.key)) e.preventDefault();
   });
+  wc.on('zoom-changed', () => { wc.setZoomLevel(0); });
+  wc.on('did-finish-load', () => { wc.setZoomLevel(0); wc.setZoomFactor(1); });
 
   // If the main window closes mid-recording, tear down the always-on-top overlay
   // windows so they don't keep the app alive (blocking 'window-all-closed').
