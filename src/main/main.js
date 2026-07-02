@@ -448,9 +448,11 @@ function endStream(stream) {
 
 ipcMain.handle('rec:start', async (_evt, { display, kind, region, scene, transition }) => {
   const recBaseEpoch = Date.now();
+  // Camera mode has no display; default to the primary so project fields stay valid.
+  if (!display) display = screen.getPrimaryDisplay();
   // Cursor coordinates only map cleanly onto a full-screen (or cropped-region)
-  // capture. When a region is set, clicks are normalised relative to it.
-  if (kind !== 'window') {
+  // capture — only track for screen recordings (not window or camera).
+  if (kind === 'screen') {
     ensureMacCursorPermission();
     startCursorTracking(recBaseEpoch, display, region);
   } else {

@@ -463,6 +463,39 @@ kbd {
 .timeline .clip.import.src-e { background: linear-gradient(180deg, rgba(16,185,129,0.20), rgba(16,185,129,0.07)); border-color: rgba(16,185,129,0.42); }
 .timeline .clip.import.src-f { background: linear-gradient(180deg, rgba(96,165,250,0.20), rgba(96,165,250,0.07)); border-color: rgba(96,165,250,0.42); }
 
+/* Camera background picker (swatch row). */
+.bg-label { color: var(--muted); font-size: 13px; }
+.bg-picker { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.bg-swatch {
+  width: 28px; height: 28px; padding: 0; border-radius: 8px;
+  border: 2px solid var(--border); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; color: #e5e7eb; background: var(--panel);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.bg-swatch:hover { border-color: var(--muted); }
+.bg-swatch.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(16,185,129,0.4); }
+/* Segmentation unavailable: only "none" works; dim/disable the replace swatches. */
+.bg-picker.no-seg .bg-swatch:not([data-bg="none"]) { opacity: 0.35; pointer-events: none; }
+
+/* Camera-only mode: show the processed camera canvas full-frame in the stage. */
+.preview-stage.cam-full #screenPreviewVideo { display: none !important; }
+.preview-stage.cam-full .preview-placeholder { display: none; }
+.preview-stage.cam-full .cam-overlay {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; border-radius: 0; box-shadow: none;
+}
+
+/* Live microphone level meter under the mic selector. */
+.mic-meter {
+  margin-top: 6px; height: 6px; border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--border); overflow: hidden;
+}
+.mic-meter-fill {
+  height: 100%; width: 0%; background: var(--accent);
+  transition: width 60ms linear, background 120ms var(--ease);
+}
+
 /* ---- Multi-track timeline (overlay video layers above the main track) ---- */
 .timeline-stack { flex: 1; position: relative; display: flex; flex-direction: column; gap: 5px; }
 .timeline-stack .timeline { flex: none; width: 100%; }

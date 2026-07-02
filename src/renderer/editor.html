@@ -57,6 +57,19 @@
           <button id="redoBtn" disabled title="إعادة آخر تعديل (Ctrl+Y)">↪ إعادة</button>
         </div>
         <div class="sep"></div>
+        <div class="group" id="silenceGroup">
+          <button class="btn-primary" id="removeSilenceBtn" title="احذف تلقائيًا المقاطع الصامتة (قصّ سريع مثل اليوتيوبرز)">✂ حذف الصمت تلقائيًا</button>
+          <div class="slider">
+            <span>الحساسية: <b id="silenceSensVal">متوسطة</b></span>
+            <input type="range" id="silenceSens" min="1" max="5" step="1" value="3" title="أعلى = يقصّ صمتًا أكثر" />
+          </div>
+          <div class="slider">
+            <span>أقصر صمت يُقطع: <b id="silenceGapVal">0.4</b>ث</span>
+            <input type="range" id="silenceGap" min="0.2" max="2" step="0.1" value="0.4" />
+          </div>
+          <span class="status" id="silenceStatus"></span>
+        </div>
+        <div class="sep"></div>
         <div class="group">
           <div class="slider">
             <span>الانتقال</span>

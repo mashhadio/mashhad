@@ -6,6 +6,7 @@ const previewPlaceholder = document.getElementById('previewPlaceholder');
 const screenPreviewVideo = document.getElementById('screenPreviewVideo');
 const micSelect = document.getElementById('micSelect');
 const micEnabled = document.getElementById('micEnabled');
+const micMeterFill = document.getElementById('micMeterFill');
 const camSelect = document.getElementById('camSelect');
 const camEnabled = document.getElementById('camEnabled');
 const fpsSelect = document.getElementById('fpsSelect');
@@ -31,7 +32,8 @@ const regionOutline = document.getElementById('regionOutline');
 
 const camPreviewBox = document.getElementById('camPreviewBox');
 const camPreview = document.getElementById('camPreview');
-const blurEnabled = document.getElementById('blurEnabled');
+const bgPicker = document.getElementById('bgPicker');
+const bgFileInput = document.getElementById('bgFileInput');
 const blurAmount = document.getElementById('blurAmount');
 const blurAmountVal = document.getElementById('blurAmountVal');
 const blurAmountWrap = document.getElementById('blurAmountWrap');
@@ -212,6 +214,7 @@ if (openScreenSettingsBtn) {
 }
 
 async function loadSources() {
+  if (currentKind === 'camera') return loadCameraSources();
   const hintEl = document.getElementById('sourceHint');
   if (hintEl) hintEl.innerHTML = SOURCE_HINTS[currentKind] || '';
 
@@ -266,8 +269,13 @@ function selectSource(id) {
   // A region is tied to a specific display; switching sources invalidates it.
   selectedRegion = null;
   updateAreaUI();
-  if (selectedSource) startScreenPreview(selectedSource);
-  else stopScreenPreview();
+  if (currentKind === 'camera') {
+    startCameraModePreview();
+  } else if (selectedSource) {
+    startScreenPreview(selectedSource);
+  } else {
+    stopScreenPreview();
+  }
 }
 
 sourceSelect.addEventListener('change', () => selectSource(sourceSelect.value));
@@ -413,16 +421,84 @@ function setTabSelected(kind) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('selected', t.dataset.kind === kind));
 }
 
+// Show/hide the screen-only controls (crop, platform format, scenes, webcam
+// overlay) depending on whether we're in camera-recording mode.
+function updateModeUI() {
+  const cam = currentKind === 'camera';
+  const fmtField = document.getElementById('formatField');
+  const areaField = document.getElementById('areaField');
+  const scenesBox = document.getElementById('scenesBox');
+  const camField = camEnabled.closest('.field');
+  if (fmtField) fmtField.style.display = cam ? 'none' : '';
+  if (areaField) areaField.style.display = cam ? 'none' : '';
+  if (scenesBox) scenesBox.style.display = cam ? 'none' : '';
+  if (camField) camField.style.display = cam ? 'none' : '';
+  previewStage.classList.toggle('cam-full', cam);
+  if (cam) {
+    camPreviewBox.style.display = 'flex'; // background picker always available
+  } else if (!camEnabled.checked) {
+    // Leaving camera mode with no webcam overlay wanted: stop it and hide the panel.
+    if (camPreviewOn) stopCamPreview(); else camPreviewBox.style.display = 'none';
+  }
+}
+
 // Source-type tabs + refresh
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => {
     setTabSelected(tab.dataset.kind);
     currentKind = tab.dataset.kind;
     Prefs.set('sourceKind', currentKind);
+    updateModeUI();
     loadSources();
   });
 });
 document.getElementById('refreshSources').addEventListener('click', () => loadSources());
+
+// Camera-recording mode: list cameras and preview the processed feed full-frame.
+async function loadCameraSources() {
+  const hintEl = document.getElementById('sourceHint');
+  if (hintEl) hintEl.innerHTML = '🎥 <b>الكاميرا</b> — سجّل الكاميرا كفيديو رئيسي، مع خلفية اختيارية (لون/صورة/تمويه).';
+  await stopScreenPreview();
+  let cams = [];
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    cams = devices.filter((d) => d.kind === 'videoinput');
+  } catch (_) {}
+  sources = cams.map((c, i) => ({ id: c.deviceId, name: c.label || `كاميرا ${i + 1}`, kind: 'camera' }));
+  sourceSelect.innerHTML = '';
+  if (!sources.length) {
+    const opt = document.createElement('option');
+    opt.value = ''; opt.textContent = 'لا توجد كاميرا متاحة';
+    sourceSelect.appendChild(opt);
+    selectedSource = null; recordBtn.disabled = true;
+    return;
+  }
+  sources.forEach((s) => {
+    const opt = document.createElement('option');
+    opt.value = s.id; opt.textContent = s.name;
+    sourceSelect.appendChild(opt);
+  });
+  const prevId = selectedSource && selectedSource.id;
+  const chosen = sources.find((s) => s.id === prevId) || sources[0];
+  sourceSelect.value = chosen.id;
+  selectSource(chosen.id);
+}
+
+// Start (or restart) the full-frame camera preview for camera-recording mode.
+async function startCameraModePreview() {
+  camPreview.style.display = 'block';
+  previewPlaceholder.style.display = 'none';
+  camStatus.textContent = 'جارٍ تشغيل الكاميرا…';
+  try {
+    await camProcessor.start(selectedSource ? selectedSource.id : undefined);
+    camPreviewOn = true;
+    camStatus.textContent = '';
+    if (!camProcessor.blurAvailable) { bgPicker.classList.add('no-seg'); camStatus.textContent = 'استبدال الخلفية غير متاح على هذا النظام'; }
+  } catch (err) {
+    camStatus.textContent = 'خطأ في الكاميرا: ' + (err.message || err);
+    console.warn('Camera preview failed:', err);
+  }
+}
 
 async function loadDevices() {
   try {
@@ -466,6 +542,76 @@ async function loadDevices() {
 }
 
 // ---------------------------------------------------------------------------
+// Microphone: robust capture + live level meter
+// ---------------------------------------------------------------------------
+// Open a mic stream, falling back to the default device if the saved deviceId is
+// stale (a changed/removed device makes `deviceId: { exact }` throw and would
+// otherwise silently record no audio).
+async function getMicStream() {
+  const base = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
+  const id = micSelect.value;
+  if (id) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: id }, ...base }, video: false });
+    } catch (err) {
+      console.warn('Mic (exact device) failed, retrying with default:', err.message);
+    }
+  }
+  return navigator.mediaDevices.getUserMedia({ audio: base, video: false });
+}
+
+let micMonitorStream = null;
+let micMonitorCtx = null;
+let micMonitorRAF = 0;
+let micMonitorToken = 0; // guards against overlapping async starts leaking contexts
+function setMicLevel(l) {
+  const pct = Math.round(Math.min(1, Math.max(0, l)) * 100);
+  micMeterFill.style.width = pct + '%';
+  micMeterFill.style.background = l < 0.55 ? 'var(--accent)' : l < 0.82 ? '#e0b341' : '#e0594b';
+}
+async function startMicMonitor() {
+  stopMicMonitor();
+  if (micEnabled.disabled || !micEnabled.checked) return;
+  const token = ++micMonitorToken;
+  let stream;
+  try {
+    stream = await getMicStream();
+  } catch (err) {
+    console.warn('Mic monitor failed:', err.message);
+    return;
+  }
+  // A newer start (or a stop) happened while we awaited — discard this one.
+  if (token !== micMonitorToken) { stream.getTracks().forEach((t) => t.stop()); return; }
+  micMonitorStream = stream;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  micMonitorCtx = new AC();
+  const src = micMonitorCtx.createMediaStreamSource(micMonitorStream);
+  const analyser = micMonitorCtx.createAnalyser();
+  analyser.fftSize = 512;
+  src.connect(analyser);
+  const data = new Uint8Array(analyser.fftSize);
+  const loop = () => {
+    analyser.getByteTimeDomainData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+    setMicLevel(Math.sqrt(sum / data.length) * 3); // scale RMS for a lively bar
+    micMonitorRAF = requestAnimationFrame(loop);
+  };
+  loop();
+}
+function stopMicMonitor() {
+  micMonitorToken++; // invalidate any in-flight start
+  if (micMonitorRAF) cancelAnimationFrame(micMonitorRAF);
+  micMonitorRAF = 0;
+  if (micMonitorStream) { micMonitorStream.getTracks().forEach((t) => t.stop()); micMonitorStream = null; }
+  if (micMonitorCtx) { try { micMonitorCtx.close(); } catch (_) {} micMonitorCtx = null; }
+  setMicLevel(0);
+}
+micEnabled.addEventListener('change', () => { if (micEnabled.checked) startMicMonitor(); else stopMicMonitor(); });
+// Restart on device change whenever the mic is enabled (not only if already running).
+micSelect.addEventListener('change', () => { if (micEnabled.checked && !micEnabled.disabled) startMicMonitor(); });
+
+// ---------------------------------------------------------------------------
 // Camera preview + blur
 // ---------------------------------------------------------------------------
 async function startCamPreview() {
@@ -474,14 +620,13 @@ async function startCamPreview() {
   camPreview.style.display = 'block'; // overlay on the preview stage
   camStatus.textContent = 'جارٍ تشغيل الكاميرا…';
   try {
-    await camProcessor.start(camSelect.value);
+    await camProcessor.start(currentKind === 'camera' ? (selectedSource && selectedSource.id) : camSelect.value);
     camPreviewOn = true;
     camStatus.textContent = '';
     if (!camProcessor.blurAvailable) {
-      blurEnabled.disabled = true;
-      blurEnabled.checked = false;
-      blurEnabled.parentElement.title = 'تمويه الخلفية غير متاح على هذا النظام';
-      camStatus.textContent = 'التمويه غير متاح';
+      // Background replacement needs segmentation; offer only "none" without it.
+      bgPicker.classList.add('no-seg');
+      camStatus.textContent = 'استبدال الخلفية غير متاح على هذا النظام';
     }
   } catch (err) {
     camStatus.textContent = 'خطأ في الكاميرا: ' + err.message;
@@ -505,9 +650,83 @@ camSelect.addEventListener('change', () => {
   if (camPreviewOn) startCamPreview();
 });
 
-blurEnabled.addEventListener('change', () => {
-  camProcessor.setBlur(blurEnabled.checked);
-  blurAmountWrap.style.display = blurEnabled.checked ? 'flex' : 'none';
+// ---------------------------------------------------------------------------
+// Camera background picker (none / blur / color / gradient / uploaded image)
+// ---------------------------------------------------------------------------
+const BG_GRADIENTS = {
+  sunset: ['#ff7e5f', '#feb47b'],
+  ocean: ['#2193b0', '#6dd5ed'],
+  forest: ['#134e5e', '#71b280'],
+};
+// Build a gradient background as an offscreen canvas (usable as an image source).
+function makeGradientCanvas(stops) {
+  const c = document.createElement('canvas');
+  c.width = 1280; c.height = 720;
+  const g = c.getContext('2d').createLinearGradient(0, 0, c.width, c.height);
+  g.addColorStop(0, stops[0]); g.addColorStop(1, stops[1]);
+  const cx = c.getContext('2d'); cx.fillStyle = g; cx.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+// Current background selection, persisted so it survives restarts.
+let bgState = { mode: 'none', color: '#1e293b', grad: null, imageData: null };
+
+function highlightBgSwatch() {
+  [...bgPicker.querySelectorAll('.bg-swatch')].forEach((el) => {
+    const m = el.dataset.bg;
+    let on = false;
+    if (m === bgState.mode) {
+      if (m === 'color') on = el.dataset.color === bgState.color;
+      else if (m === 'grad') on = el.dataset.grad === bgState.grad;
+      else on = true; // none / blur / upload
+    }
+    el.classList.toggle('selected', on);
+  });
+}
+
+let bgImageToken = 0; // guards against a slow image load overwriting a newer pick
+function applyBackgroundToProcessor() {
+  const m = bgState.mode;
+  if (m === 'blur') camProcessor.setBackground('blur');
+  else if (m === 'color') camProcessor.setBackground('color', bgState.color);
+  else if (m === 'grad' && BG_GRADIENTS[bgState.grad]) camProcessor.setBackground('image', makeGradientCanvas(BG_GRADIENTS[bgState.grad]));
+  else if (m === 'image' && bgState.imageData) {
+    const token = ++bgImageToken;
+    const img = new Image();
+    img.onload = () => { if (bgState.mode === 'image' && token === bgImageToken) camProcessor.setBackground('image', img); };
+    img.src = bgState.imageData;
+  } else camProcessor.setBackground('none');
+  blurAmountWrap.style.display = m === 'blur' ? 'flex' : 'none';
+  highlightBgSwatch();
+}
+
+function setBackground(mode, opts = {}) {
+  bgState.mode = mode;
+  if (mode === 'color') bgState.color = opts.color;
+  if (mode === 'grad') bgState.grad = opts.grad;
+  if (mode === 'image' && opts.imageData) bgState.imageData = opts.imageData;
+  applyBackgroundToProcessor();
+  // Persist the choice but NOT the (potentially multi-MB) uploaded image data —
+  // that would bloat settings.json and slow startup. Uploads last the session.
+  Prefs.set('bg', { mode: mode === 'image' ? 'none' : bgState.mode, color: bgState.color, grad: bgState.grad });
+}
+
+bgPicker.addEventListener('click', (e) => {
+  const sw = e.target.closest('.bg-swatch');
+  if (!sw) return;
+  const bg = sw.dataset.bg;
+  if (bg === 'upload') { bgFileInput.click(); return; }
+  if (bg === 'color') setBackground('color', { color: sw.dataset.color });
+  else if (bg === 'grad') setBackground('grad', { grad: sw.dataset.grad });
+  else setBackground(bg); // 'none' | 'blur'
+});
+
+bgFileInput.addEventListener('change', () => {
+  const file = bgFileInput.files && bgFileInput.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => setBackground('image', { imageData: reader.result });
+  reader.readAsDataURL(file);
+  bgFileInput.value = '';
 });
 
 blurAmount.addEventListener('input', () => {
@@ -544,6 +763,7 @@ function resetRecordingUI() {
   recordBtn.disabled = !selectedSource;
   stopBtn.disabled = false;
   stopTimer();
+  startMicMonitor(); // resume the level meter after a stopped/failed recording
 }
 
 // Stop every capture track and the region-crop loop, then clear the list.
@@ -614,9 +834,68 @@ async function startRegionCrop(fullStream, display, region, fps, outSize) {
   return canvas.captureStream(fps);
 }
 
+// Record the processed camera canvas (with its background) as the main video.
+async function startCameraRecording() {
+  const fps = parseInt(fpsSelect.value, 10);
+  const preset = currentPreset();
+  const useMic = micEnabled.checked && !micEnabled.disabled;
+  let recBaseEpoch;
+  try {
+    // No cursor tracking / region / scenes in camera mode; main defaults display.
+    ({ recBaseEpoch } = await window.api.startRecording({ display: null, kind: 'camera', region: null }));
+
+    if (!camPreviewOn) await startCameraModePreview();
+    const camStream = camProcessor.getStream(fps);
+    streams.push(camStream);
+    const tracks = [...camStream.getVideoTracks()];
+
+    stopMicMonitor();
+    let hasAudio = false;
+    if (useMic) {
+      try {
+        const audioStream = await getMicStream();
+        streams.push(audioStream);
+        tracks.push(...audioStream.getAudioTracks());
+        hasAudio = audioStream.getAudioTracks().length > 0;
+      } catch (err) {
+        console.warn('Mic capture failed:', err.message);
+        topStatus.textContent = 'تعذّر التقاط الميكروفون — سيُسجَّل بلا صوت.';
+      }
+    }
+
+    pendingWrites = [];
+    writeQueue = Promise.resolve();
+    const combined = new MediaStream(tracks);
+    const vs = camStream.getVideoTracks()[0]?.getSettings?.() || {};
+    const { mime, bitrate } = pickVideoConfig(preset, fps, vs.width || 1280, vs.height || 720, hasAudio);
+    mediaRecorder = new MediaRecorder(combined, { mimeType: mime, videoBitsPerSecond: bitrate });
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) queueChunk(e.data, window.api.sendVideoChunk); };
+    mediaRecorder.onstop = onRecordingStopped;
+    camStopped = Promise.resolve(); // no separate cam file in camera mode
+    mediaRecorder.start(250);
+
+    recState = { display: null, recBaseEpoch, hasAudio, hasCam: false };
+    isRecording = true;
+    recBanner.classList.add('active');
+    recordBtn.style.display = 'none';
+    recordBtn.textContent = '● جارٍ التسجيل…';
+    startTimer(recBaseEpoch);
+  } catch (err) {
+    console.error('Failed to start camera recording:', err);
+    try { await window.api.abortRecording(); } catch (_) {}
+    teardownStreams();
+    mediaRecorder = null;
+    topStatus.textContent = 'تعذّر بدء التسجيل: ' + (err.message || err);
+    resetRecordingUI();
+  }
+}
+
 async function startRecording() {
   if (!selectedSource || isRecording) return;
   recordBtn.disabled = true;
+
+  // Camera mode records the processed camera canvas directly (no screen capture).
+  if (currentKind === 'camera') return startCameraRecording();
 
   // macOS gates screen capture: bail with a helpful dialog instead of silently
   // recording a black screen. (No-op / always ok on Windows.)
@@ -681,26 +960,20 @@ async function startRecording() {
 
     const tracks = [...captureStream.getVideoTracks()];
 
+    // The live meter holds the mic device; release it so recording capture (with
+    // its own constraints) isn't blocked by device contention.
+    stopMicMonitor();
+
     let hasAudio = false;
     if (useMic) {
       try {
-        const audioStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            deviceId: micSelect.value ? { exact: micSelect.value } : undefined,
-            // Real-time WebRTC noise suppression at capture; the ffmpeg RNNoise
-            // pass on export removes whatever remains.
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            channelCount: 1,
-          },
-          video: false,
-        });
+        const audioStream = await getMicStream(); // falls back to default if saved device is gone
         streams.push(audioStream);
         tracks.push(...audioStream.getAudioTracks());
-        hasAudio = true;
+        hasAudio = audioStream.getAudioTracks().length > 0;
       } catch (err) {
         console.warn('Mic capture failed:', err.message);
+        topStatus.textContent = 'تعذّر التقاط الميكروفون — سيُسجَّل الفيديو بلا صوت. تحقّق من إذن الميكروفون واختيار الجهاز.';
       }
     }
 
@@ -934,12 +1207,15 @@ function applyHomePrefs() {
   blurAmountVal.textContent = blurAmount.value;
   camProcessor.setBlurAmount(parseInt(blurAmount.value, 10));
 
-  blurEnabled.checked = Prefs.get('blur', false);
-  camProcessor.setBlur(blurEnabled.checked);
-  blurAmountWrap.style.display = blurEnabled.checked ? 'flex' : 'none';
+  // Restore the saved camera background; migrate the old boolean blur pref.
+  const savedBg = Prefs.get('bg', null);
+  if (savedBg && savedBg.mode) bgState = Object.assign(bgState, savedBg);
+  else if (Prefs.get('blur', false)) bgState.mode = 'blur';
+  applyBackgroundToProcessor();
 
   if (!camEnabled.disabled) camEnabled.checked = Prefs.get('camEnabled', false);
-  if (camEnabled.checked) startCamPreview();
+  // In camera mode the camera is already the main preview; don't also start the overlay.
+  if (currentKind !== 'camera' && camEnabled.checked) startCamPreview();
 
   scenesEnabled.checked = Prefs.get('scenes', false);
   sceneStart.value = Prefs.get('sceneStart', 'both');
@@ -954,7 +1230,6 @@ function applyHomePrefs() {
   micSelect.addEventListener('change', () => Prefs.set('micDevice', micSelect.value));
   camEnabled.addEventListener('change', () => Prefs.set('camEnabled', camEnabled.checked));
   camSelect.addEventListener('change', () => Prefs.set('camDevice', camSelect.value));
-  blurEnabled.addEventListener('change', () => Prefs.set('blur', blurEnabled.checked));
   blurAmount.addEventListener('input', () => Prefs.set('blurAmount', parseInt(blurAmount.value, 10)));
 }
 
@@ -962,6 +1237,7 @@ function applyHomePrefs() {
   await Prefs.load();
   currentKind = Prefs.get('sourceKind', 'screen');
   setTabSelected(currentKind);
+  updateModeUI();
 
   // Surface a missing Screen Recording grant as soon as the app opens: show the
   // persistent banner and, if denied, pop the native "Open System Settings"
@@ -970,9 +1246,12 @@ function applyHomePrefs() {
     window.api.ensureScreenPermission();
   }
 
-  await loadSources();
+  // Devices + segmentation model must be ready BEFORE loading sources, so camera
+  // mode has real device labels and background replacement works on first paint.
   await loadDevices();
-  await camProcessor.init(); // preload the blur model (no-op if unavailable)
+  await camProcessor.init(); // preload the blur/segmentation model (no-op if unavailable)
+  await loadSources();
   applyHomePrefs();
+  startMicMonitor(); // show the live mic level so the user can confirm input
   await loadLibrary();
 })();

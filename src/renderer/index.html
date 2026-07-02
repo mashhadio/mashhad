@@ -42,6 +42,7 @@
         <div class="tabs">
           <button class="tab selected" id="tabScreens" data-kind="screen">الشاشات</button>
           <button class="tab" id="tabWindows" data-kind="window">النوافذ</button>
+          <button class="tab" id="tabCamera" data-kind="camera">الكاميرا</button>
         </div>
         <button class="btn-ghost" id="refreshSources" title="تحديث القائمة">↻ تحديث</button>
       </div>
@@ -86,6 +87,7 @@
         <div class="field">
           <label for="micSelect">الميكروفون</label>
           <select id="micSelect"></select>
+          <div class="mic-meter" title="مستوى صوت الميكروفون"><div class="mic-meter-fill" id="micMeterFill"></div></div>
         </div>
         <div class="field">
           <label for="camSelect">الكاميرا</label>
@@ -126,7 +128,19 @@
       </div>
 
       <div id="camPreviewBox" class="cam-controls-row" style="display:none">
-        <label class="switch"><input type="checkbox" id="blurEnabled" /> تمويه الخلفية</label>
+        <span class="bg-label">الخلفية:</span>
+        <div class="bg-picker" id="bgPicker">
+          <button class="bg-swatch bg-none" data-bg="none" title="بدون خلفية">⃠</button>
+          <button class="bg-swatch bg-blur" data-bg="blur" title="تمويه">🌫</button>
+          <button class="bg-swatch" data-bg="color" data-color="#1e293b" style="background:#1e293b" title="رمادي داكن"></button>
+          <button class="bg-swatch" data-bg="color" data-color="#0f766e" style="background:#0f766e" title="أخضر مزرق"></button>
+          <button class="bg-swatch" data-bg="color" data-color="#3730a3" style="background:#3730a3" title="بنفسجي"></button>
+          <button class="bg-swatch" data-bg="grad" data-grad="sunset" style="background:linear-gradient(135deg,#ff7e5f,#feb47b)" title="غروب"></button>
+          <button class="bg-swatch" data-bg="grad" data-grad="ocean" style="background:linear-gradient(135deg,#2193b0,#6dd5ed)" title="محيط"></button>
+          <button class="bg-swatch" data-bg="grad" data-grad="forest" style="background:linear-gradient(135deg,#134e5e,#71b280)" title="غابة"></button>
+          <button class="bg-swatch bg-upload" data-bg="upload" id="bgUploadBtn" title="رفع صورة">＋</button>
+        </div>
+        <input type="file" id="bgFileInput" accept="image/*" style="display:none" />
         <div class="slider" id="blurAmountWrap" style="display:none">
           <span>قوة التمويه: <b id="blurAmountVal">12</b></span>
           <input type="range" id="blurAmount" min="4" max="30" step="1" value="12" />

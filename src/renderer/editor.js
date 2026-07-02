@@ -25,6 +25,13 @@ const autoZoomBtn = document.getElementById('autoZoomBtn');
 const addZoomBtn = document.getElementById('addZoomBtn');
 const clearZoomBtn = document.getElementById('clearZoomBtn');
 const splitBtn = document.getElementById('splitBtn');
+const removeSilenceBtn = document.getElementById('removeSilenceBtn');
+const silenceSens = document.getElementById('silenceSens');
+const silenceSensVal = document.getElementById('silenceSensVal');
+const silenceGap = document.getElementById('silenceGap');
+const silenceGapVal = document.getElementById('silenceGapVal');
+const silenceGroup = document.getElementById('silenceGroup');
+const silenceStatus = document.getElementById('silenceStatus');
 const undoBtn = document.getElementById('undoBtn');
 const redoBtn = document.getElementById('redoBtn');
 const clipTransition = document.getElementById('clipTransition');
@@ -530,6 +537,13 @@ function setupPanels() {
 // Apply saved preferences to the editor controls, then persist on change.
 function applyEditorPrefs() {
   if (!noiseProfile.disabled) noiseProfile.value = Prefs.get('noiseProfile', noiseProfile.value);
+
+  // Auto remove-silence: only meaningful for a recording with mic audio.
+  silenceSens.value = String(Prefs.get('silenceSens', 3));
+  silenceSensVal.textContent = SILENCE_SENS_LABELS[silenceSens.value] || 'متوسطة';
+  silenceGap.value = String(Prefs.get('silenceGap', 0.4));
+  silenceGapVal.textContent = parseFloat(silenceGap.value).toFixed(1);
+  silenceGroup.style.display = (recording && recording.hasAudio) ? '' : 'none';
 
   zoomLevel.value = Prefs.get('zoom', 2.0);
   defaultScale = parseFloat(zoomLevel.value);
@@ -2239,17 +2253,145 @@ sceneTransRange.addEventListener('input', () => {
   if (!playing) seekEdited(playheadEdited); // re-render at the current position
 });
 
+// ---------------------------------------------------------------------------
+// Auto remove-silence (jump cuts): keep only the spans where the mic has speech.
+// ---------------------------------------------------------------------------
+let recAudioBuffer = null; // decoded recording audio, cached across runs
+let recAudioFailed = false; // remember a decode failure so we don't re-fetch a big file
+async function getRecordingAudioBuffer() {
+  if (recAudioBuffer) return recAudioBuffer;
+  if (recAudioFailed || !recording || !recording.videoUrl) return null;
+  const arr = await (await fetch(recording.videoUrl)).arrayBuffer();
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const actx = new AC();
+  try { recAudioBuffer = await actx.decodeAudioData(arr); }
+  catch (err) { recAudioFailed = true; throw err; }
+  finally { try { actx.close(); } catch (_) {} }
+  return recAudioBuffer;
+}
+
+// Speech spans [ [start,end], ... ] in source seconds. Windows below an
+// amplitude threshold are "silence"; only silence gaps ≥ minSilence are cut, and
+// each kept span is padded so cuts don't clip word starts/ends.
+function detectSpeechRanges(buf, thresholdRatio, minSilence, pad) {
+  const sr = buf.sampleRate;
+  const a = buf.getChannelData(0);
+  const b = buf.numberOfChannels > 1 ? buf.getChannelData(1) : null;
+  const n = a.length;
+  const win = Math.max(1, Math.round(sr * 0.02)); // 20 ms
+  const nWin = Math.ceil(n / win);
+  const rms = new Float32Array(nWin);
+  let peak = 0;
+  for (let w = 0; w < nWin; w++) {
+    const s = w * win, e = Math.min(n, s + win);
+    let sum = 0;
+    for (let i = s; i < e; i++) { const v = b ? (a[i] + b[i]) * 0.5 : a[i]; sum += v * v; }
+    const r = Math.sqrt(sum / Math.max(1, e - s));
+    rms[w] = r; if (r > peak) peak = r;
+  }
+  const thresh = Math.max(peak * thresholdRatio, 0.004);
+  const winDur = win / sr;
+  const raw = [];
+  for (let i = 0; i < nWin;) {
+    if (rms[i] >= thresh) { let j = i; while (j < nWin && rms[j] >= thresh) j++; raw.push([i * winDur, j * winDur]); i = j; }
+    else i++;
+  }
+  if (!raw.length) return [];
+  const merged = [];
+  let [cs, ce] = raw[0];
+  for (let k = 1; k < raw.length; k++) {
+    const [s, e] = raw[k];
+    if (s - ce < minSilence) ce = e; else { merged.push([cs, ce]); [cs, ce] = [s, e]; }
+  }
+  merged.push([cs, ce]);
+  const dur = buf.duration;
+  const out = [];
+  for (const [s, e] of merged) {
+    const ps = Math.max(0, s - pad), pe = Math.min(dur, e + pad);
+    if (out.length && ps <= out[out.length - 1][1]) out[out.length - 1][1] = Math.max(out[out.length - 1][1], pe);
+    else out.push([ps, pe]);
+  }
+  return out;
+}
+
+const SILENCE_RATIOS = { 1: 0.02, 2: 0.04, 3: 0.06, 4: 0.10, 5: 0.15 };
+
+async function removeSilences() {
+  if (exporting || !recording || !recording.hasAudio) return;
+  removeSilenceBtn.disabled = true;
+  silenceStatus.textContent = 'جارٍ التحليل…';
+  let buf;
+  try { buf = await getRecordingAudioBuffer(); }
+  catch (_) { silenceStatus.textContent = 'تعذّر تحليل الصوت'; removeSilenceBtn.disabled = false; return; }
+  removeSilenceBtn.disabled = false;
+  if (!buf) { silenceStatus.textContent = 'لا يوجد صوت للتحليل'; return; }
+
+  const ratio = SILENCE_RATIOS[parseInt(silenceSens.value, 10)] || 0.06;
+  const minSilence = parseFloat(silenceGap.value) || 0.4;
+  const speech = detectSpeechRanges(buf, ratio, minSilence, 0.12);
+  if (!speech.length) { silenceStatus.textContent = 'لم يُعثر على كلام'; return; }
+
+  if (playing) pause(); // don't let the render loop index a stale clip mid-rebuild
+
+  // Keep only speech sub-ranges of recording clips; leave imports/other tracks.
+  const before = editedDuration();
+  const newClips = [];
+  let recClipsIn = 0;
+  let recClipsKept = 0;
+  for (const c of clips) {
+    const src = sourceById(c.sourceId);
+    if (src && src.kind === 'recording') {
+      recClipsIn++;
+      let first = true;
+      for (const [s, e] of speech) {
+        const a2 = Math.max(s, c.start), b2 = Math.min(e, c.end);
+        if (b2 - a2 > 0.05) {
+          const nc = { id: clipSeq++, sourceId: c.sourceId, start: a2, end: b2, speed: c.speed || 1 };
+          if (first && c.transition) nc.transition = { ...c.transition }; // keep the clip's intro transition
+          newClips.push(nc);
+          recClipsKept++;
+          first = false;
+        }
+      }
+    } else newClips.push({ ...c });
+  }
+  // Don't silently wipe the footage if detection removed every recording clip.
+  if (recClipsIn > 0 && recClipsKept === 0) { silenceStatus.textContent = 'الحساسية عالية جدًا — لم يبقَ شيء'; return; }
+  if (!newClips.length) { silenceStatus.textContent = 'لا شيء لإبقائه'; return; }
+
+  pushHistory();
+  clips = newClips;
+  selectedClipId = null;
+  playIdx = 0; // clips array replaced; reset the play index the render loop reads
+  updateEmptyState();
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+  const removed = Math.max(0, before - editedDuration());
+  silenceStatus.textContent = removed > 0.05 ? `أُزيل ${fmt(removed)} من الصمت` : 'لا صمت يُذكر';
+}
+
 const importBtn = document.getElementById('importBtn');
 importBtn.addEventListener('click', importVideos);
 autoZoomBtn.addEventListener('click', autoZoom);
 addZoomBtn.addEventListener('click', addZoomHere);
 clearZoomBtn.addEventListener('click', clearZoom);
 splitBtn.addEventListener('click', splitAtPlayhead);
+removeSilenceBtn.addEventListener('click', removeSilences);
 undoBtn.addEventListener('click', undo);
 redoBtn.addEventListener('click', redo);
 addTrackBtn.addEventListener('click', addOverlayTrack);
 voBtn.addEventListener('click', toggleVoiceOver);
 importAudioBtn.addEventListener('click', importAudioFiles);
+
+const SILENCE_SENS_LABELS = { 1: 'منخفضة جدًا', 2: 'منخفضة', 3: 'متوسطة', 4: 'عالية', 5: 'عالية جدًا' };
+silenceSens.addEventListener('input', () => {
+  silenceSensVal.textContent = SILENCE_SENS_LABELS[silenceSens.value] || 'متوسطة';
+  Prefs.set('silenceSens', parseInt(silenceSens.value, 10));
+});
+silenceGap.addEventListener('input', () => {
+  silenceGapVal.textContent = parseFloat(silenceGap.value).toFixed(1);
+  Prefs.set('silenceGap', parseFloat(silenceGap.value));
+});
 
 // Reflect the selected clip's intro transition in the picker.
 function updateTransitionControl() {

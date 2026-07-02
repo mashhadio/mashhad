@@ -19,7 +19,10 @@
       this.video = document.createElement('video');
       this.video.muted = true;
       this.video.playsInline = true;
-      this.blur = false;
+      // Background: 'none' (pass-through) | 'blur' | 'color' | 'image'.
+      this.bgMode = 'none';
+      this.bgColor = '#1e293b';
+      this.bgImage = null; // HTMLImageElement when bgMode === 'image'
       this.blurAmount = 12;
       this.running = false;
       this.seg = null;
@@ -70,15 +73,23 @@
       this.video.srcObject = null;
     }
 
-    setBlur(on) { this.blur = on; }
+    setBlur(on) { this.bgMode = on ? 'blur' : 'none'; }
     setBlurAmount(px) { this.blurAmount = px; }
+    // mode: 'none'|'blur'|'color'|'image'. value: color string or HTMLImageElement.
+    setBackground(mode, value) {
+      this.bgMode = mode;
+      if (mode === 'color' && value) this.bgColor = value;
+      if (mode === 'image') this.bgImage = value || null;
+    }
+    // Background replacement needs segmentation; 'none' is a plain pass-through.
+    _needsSeg() { return this.bgMode !== 'none'; }
 
     getStream(fps = 30) { return this.canvas.captureStream(fps); }
 
     async _loop() {
       if (!this.running) return;
       try {
-        if (this.blur && this.blurAvailable && this.seg && this.video.readyState >= 2) {
+        if (this._needsSeg() && this.blurAvailable && this.seg && this.video.readyState >= 2) {
           if (!this._busy) {
             this._busy = true;
             await this.seg.send({ image: this.video });
@@ -116,10 +127,24 @@
       ctx.globalCompositeOperation = 'source-in';
       ctx.drawImage(results.image, 0, 0, w, h);
 
-      // 2) Paint the blurred frame behind the person.
+      // 2) Paint the chosen background BEHIND the person.
       ctx.globalCompositeOperation = 'destination-over';
-      ctx.filter = `blur(${this.blurAmount}px)`;
-      ctx.drawImage(results.image, 0, 0, w, h);
+      if (this.bgMode === 'color') {
+        ctx.filter = 'none';
+        ctx.fillStyle = this.bgColor;
+        ctx.fillRect(0, 0, w, h);
+      } else if (this.bgMode === 'image' && this.bgImage && this.bgImage.width) {
+        ctx.filter = 'none';
+        // cover-fit the background image into the frame
+        const iw = this.bgImage.width, ih = this.bgImage.height;
+        const cover = Math.max(w / iw, h / ih);
+        const dw = iw * cover, dh = ih * cover;
+        ctx.drawImage(this.bgImage, (w - dw) / 2, (h - dh) / 2, dw, dh);
+      } else {
+        // 'blur' (or 'image' with no loaded image yet): blurred camera frame.
+        ctx.filter = `blur(${this.blurAmount}px)`;
+        ctx.drawImage(results.image, 0, 0, w, h);
+      }
 
       ctx.restore();
       ctx.filter = 'none';
