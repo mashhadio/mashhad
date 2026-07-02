@@ -31,6 +31,9 @@ const clipTransition = document.getElementById('clipTransition');
 const speedGroup = document.getElementById('speedGroup');
 const speedRange = document.getElementById('speedRange');
 const speedVal = document.getElementById('speedVal');
+const sceneGroup = document.getElementById('sceneGroup');
+const sceneTransRange = document.getElementById('sceneTransRange');
+const sceneTransValEd = document.getElementById('sceneTransValEd');
 const zoomLevel = document.getElementById('zoomLevel');
 const zoomLevelVal = document.getElementById('zoomLevelVal');
 const zoomLevelLabel = document.getElementById('zoomLevelLabel');
@@ -143,6 +146,20 @@ const transCanvas = document.createElement('canvas');
 const transCtx = transCanvas.getContext('2d', { alpha: false });
 let transSnapIdx = -1;      // incoming clip index the snapshot is the outgoing frame for
 let rafId = null;
+
+// Recording "scenes" (screen / cam / both), switched live with F1/F2/F3 and
+// logged in the recording. The editor composites them per source time with a
+// crossfade. `sceneEvents` are { t (source seconds), scene }. Empty = no scene
+// mode → the recording renders exactly as before.
+let sceneEvents = [];
+let sceneTransDur = 0.3;    // crossfade seconds (adjustable in the editor)
+// Frozen outgoing-scene frame for the crossfade (separate from clip transitions).
+const sceneTransCanvas = document.createElement('canvas');
+const sceneTransCtx = sceneTransCanvas.getContext('2d', { alpha: false });
+let lastDrawnScene = null;  // scene of the previous drawn frame (linear playback)
+let lastSceneT = 0;         // source time of the previous scene-composed frame
+let sceneXfadeFrom = null;  // outgoing scene during an active crossfade, or null
+let sceneXfadeStart = 0;    // source time the crossfade began
 // Playback intent. Drives the render loop independently of any single element's
 // paused state — crossing into a new source momentarily pauses the fresh element
 // while its async play() resolves, and we must not let that stop the loop.
@@ -238,6 +255,13 @@ async function init() {
     clips = [{ id: clipSeq++, sourceId: src.id, start: 0, end: src.duration }];
     clickTimes = (recCursor().clicks || []).map((c) => c.t / 1000);
 
+    // Scene switches (screen/cam/both), if this recording used scene mode.
+    const sc = recording.scenes;
+    if (sc && Array.isArray(sc.events) && sc.events.length) {
+      sceneEvents = sc.events.map((e) => ({ t: e.t / 1000, scene: e.scene }));
+      sceneTransDur = sc.transition != null ? sc.transition : 0.3;
+    }
+
     await seekTo(0);
     autoZoom();
     drawAt(0);
@@ -258,6 +282,7 @@ async function init() {
   buildTimeline();
   updateTimeLabel();
   updateEmptyState();
+  updateSceneControl();
 
   // Prepare the cleaned-audio preview in the background for the current profile.
   if (recHasAudio && noiseProfile.value !== 'off') applyAudioPreview(noiseProfile.value);
@@ -268,6 +293,8 @@ function setCanvasSize(w, h) {
   canvas.height = h || 1080;
   transCanvas.width = canvas.width;
   transCanvas.height = canvas.height;
+  sceneTransCanvas.width = canvas.width;
+  sceneTransCanvas.height = canvas.height;
 }
 
 // Recording-only helpers: cursor data exists only for the recording source.
@@ -615,15 +642,74 @@ function rebuildEngine() {
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
+// Active scene at recording source time `t` (last switch at or before t).
+function sceneAt(t) {
+  let s = sceneEvents.length ? sceneEvents[0].scene : 'both';
+  for (const e of sceneEvents) { if (e.t <= t + 1e-6) s = e.scene; else break; }
+  return s;
+}
+
+// Draw the webcam covering the whole canvas (cover-fit) for the cam-only scene.
+function drawCamFull() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!camReady || !camVideo.videoWidth) return;
+  const W = canvas.width, H = canvas.height, vw = camVideo.videoWidth, vh = camVideo.videoHeight;
+  const cover = Math.max(W / vw, H / vh);
+  const dw = vw * cover, dh = vh * cover;
+  ctx.drawImage(camVideo, 0, 0, vw, vh, (W - dw) / 2, (H - dh) / 2, dw, dh);
+}
+
+// Render a single scene's frame (no crossfade) to the main canvas.
+function drawSceneFrame(scene, t, srcBlocks) {
+  if (scene === 'cam') {
+    drawCamFull();
+    return;
+  }
+  // 'screen' and 'both' both show the zoom-tracked screen; 'both' adds cam PiP.
+  engine.setBlocks(srcBlocks);
+  engine.drawFrame(ctx, video, video.videoWidth, video.videoHeight, canvas.width, canvas.height, t);
+  drawClickFx(t);
+  if (scene === 'both') drawCam();
+}
+
 function drawAt(t) {
   if (!video || !video.videoWidth) return;
   const srcBlocks = blocks.filter((b) => b.sourceId === activeSourceId);
   if (activeIsRecording()) {
-    // Zoom-tracked path: pan/zoom (follows the cursor) + click effects + webcam.
-    engine.setBlocks(srcBlocks);
-    engine.drawFrame(ctx, video, video.videoWidth, video.videoHeight, canvas.width, canvas.height, t);
-    drawClickFx(t);
-    drawCam();
+    if (sceneEvents.length) {
+      // Scene mode: compose the active scene, crossfading from the previous one.
+      const scene = sceneAt(t);
+      // Only crossfade on a genuine live switch — i.e. source time advancing
+      // smoothly. A seek or a clip seam (reorder/split) jumps time; treat that as
+      // a hard cut so we don't fire a phantom fade or freeze a stale frame.
+      const jumped = lastDrawnScene === null || Math.abs(t - lastSceneT) > 0.5;
+      if (jumped) sceneXfadeFrom = null;
+      if (!jumped && (playing || capturing) && scene !== lastDrawnScene && sceneTransDur > 0) {
+        sceneTransCtx.drawImage(canvas, 0, 0, sceneTransCanvas.width, sceneTransCanvas.height);
+        sceneXfadeFrom = lastDrawnScene;
+        sceneXfadeStart = t;
+      }
+      drawSceneFrame(scene, t, srcBlocks);
+      if (sceneXfadeFrom && sceneTransDur > 0) {
+        const p = (t - sceneXfadeStart) / sceneTransDur;
+        if (p >= 0 && p < 1) {
+          ctx.globalAlpha = 1 - p;
+          ctx.drawImage(sceneTransCanvas, 0, 0, canvas.width, canvas.height);
+          ctx.globalAlpha = 1;
+        } else {
+          sceneXfadeFrom = null;
+        }
+      }
+      lastDrawnScene = scene;
+      lastSceneT = t;
+    } else {
+      // No scenes: original behaviour — zoom-tracked screen + click FX + cam PiP.
+      engine.setBlocks(srcBlocks);
+      engine.drawFrame(ctx, video, video.videoWidth, video.videoHeight, canvas.width, canvas.height, t);
+      drawClickFx(t);
+      drawCam();
+    }
   } else {
     // Imported footage: letterboxed into the canvas, zoomed to centre per block.
     plainEngine.setBlocks(srcBlocks);
@@ -793,7 +879,10 @@ function camRect() {
 }
 
 function drawCam() {
-  if (!camReady || !camShow.checked) return;
+  if (!camReady) return;
+  // Outside scene mode the camShow toggle gates the PiP; in scene mode the active
+  // scene decides when drawCam is called, so don't also require camShow.
+  if (!sceneEvents.length && !camShow.checked) return;
   const { x, y, d } = camRect();
 
   const vw = camVideo.videoWidth;
@@ -1213,6 +1302,7 @@ function redrawAfterSeek(el, t, te) {
 function seekEdited(te) {
   if (!clips.length) { playheadEdited = 0; movePlayhead(0); updateTimeLabel(); return; }
   mediaSeeking = false; // a manual scrub supersedes any pending clip-advance seek
+  lastDrawnScene = null; sceneXfadeFrom = null; // a scrub isn't a live scene switch
   te = clamp(te, 0, Math.max(0, editedDuration() - 0.001));
   const m = editedToSource(te);
   playIdx = m.idx;
@@ -2137,6 +2227,18 @@ function setSpeed(v) {
 speedRange.addEventListener('input', () => { speedVal.textContent = `${parseFloat(speedRange.value).toFixed(2)}×`; });
 speedRange.addEventListener('change', () => setSpeed(speedRange.value));
 
+// Scene-transition control: only relevant for recordings made with scene mode.
+function updateSceneControl() {
+  sceneGroup.style.display = sceneEvents.length ? '' : 'none';
+  sceneTransRange.value = String(sceneTransDur);
+  sceneTransValEd.textContent = sceneTransDur.toFixed(2);
+}
+sceneTransRange.addEventListener('input', () => {
+  sceneTransDur = parseFloat(sceneTransRange.value) || 0;
+  sceneTransValEd.textContent = sceneTransDur.toFixed(2);
+  if (!playing) seekEdited(playheadEdited); // re-render at the current position
+});
+
 const importBtn = document.getElementById('importBtn');
 importBtn.addEventListener('click', importVideos);
 autoZoomBtn.addEventListener('click', autoZoom);
@@ -2298,8 +2400,11 @@ function canvasPoint(e) {
     y: ((e.clientY - rect.top) / rect.height) * canvas.height,
   };
 }
+// The PiP is draggable when it can be shown: in scene mode the active scene
+// controls visibility (so bypass camShow, matching drawCam); otherwise camShow.
+function camPipInteractive() { return camReady && (sceneEvents.length > 0 || camShow.checked); }
 canvas.addEventListener('mousedown', (e) => {
-  if (!camReady || !camShow.checked) return;
+  if (!camPipInteractive()) return;
   const p = canvasPoint(e);
   const r = camRect();
   if (p.x >= r.x && p.x <= r.x + r.d && p.y >= r.y && p.y <= r.y + r.d) {
@@ -2316,7 +2421,7 @@ window.addEventListener('mousemove', (e) => {
 });
 window.addEventListener('mouseup', () => { camDrag = null; });
 canvas.addEventListener('mousemove', (e) => {
-  if (!camReady || !camShow.checked) { canvas.style.cursor = 'default'; return; }
+  if (!camPipInteractive()) { canvas.style.cursor = 'default'; return; }
   const p = canvasPoint(e);
   const r = camRect();
   const over = p.x >= r.x && p.x <= r.x + r.d && p.y >= r.y && p.y <= r.y + r.d;
@@ -2485,6 +2590,7 @@ async function runExport() {
 function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
   transSnapIdx = -1; // start the capture with no pending transition snapshot
   capturing = true;  // overlay elements play muted alongside during capture
+  lastDrawnScene = null; sceneXfadeFrom = null; // fresh scene-crossfade state
   return new Promise((resolve, reject) => {
     // captureStream(0) = manual mode: we push exactly one frame per drawn frame
     // via requestFrame(), so no empty/duplicated frames sneak into the encoder.

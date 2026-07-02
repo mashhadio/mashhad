@@ -126,6 +126,10 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false);
 
+  // If the main window closes mid-recording, tear down the always-on-top overlay
+  // windows so they don't keep the app alive (blocking 'window-all-closed').
+  mainWindow.on('closed', () => { hideSceneIndicator(); hideRecFrame(); });
+
   // Surface renderer console output to the terminal (dev only).
   if (!app.isPackaged) {
     mainWindow.webContents.on('console-message', (_e, level, message) => {
@@ -270,6 +274,86 @@ ipcMain.handle('frame:show', (_evt, { display, region } = {}) => {
 ipcMain.handle('frame:hide', () => hideRecFrame());
 
 // ---------------------------------------------------------------------------
+// Scenes: F1/F2/F3 switch screen / cam / both while recording. Switches are
+// logged on the recBaseEpoch time axis (like the cursor log) and the editor
+// composites them; a small content-protected indicator shows the current scene.
+// ---------------------------------------------------------------------------
+const SCENE_KEYS = { F1: 'screen', F2: 'cam', F3: 'both' };
+
+function setScene(scene) {
+  if (!recSession || !recSession.scenes) return;
+  if (scene === recSession.currentScene) return; // ignore no-op repeats
+  recSession.scenes.push({ t: Date.now() - recSession.recBaseEpoch, scene });
+  recSession.currentScene = scene;
+  updateSceneIndicator(scene);
+}
+
+function registerSceneShortcuts() {
+  for (const [key, scene] of Object.entries(SCENE_KEYS)) {
+    try { globalShortcut.register(key, () => setScene(scene)); } catch (_) {}
+  }
+}
+function unregisterSceneShortcuts() {
+  for (const key of Object.keys(SCENE_KEYS)) {
+    try { globalShortcut.unregister(key); } catch (_) {}
+  }
+}
+
+let sceneIndicatorWin = null;
+function showSceneIndicator(display, scene, region) {
+  hideSceneIndicator();
+  const b = display.bounds;
+  // Center over the captured area — the region when cropping, else the display —
+  // so the badge sits inside the recorded frame.
+  const area = region
+    ? { x: b.x + region.x, y: b.y + region.y, w: region.w, h: region.h }
+    : { x: b.x, y: b.y, w: b.width, h: b.height };
+  const W = 150; const H = 40;
+  const win = new BrowserWindow({
+    x: Math.round(area.x + (area.w - W) / 2),
+    y: Math.round(area.y + 14),
+    width: W,
+    height: H,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    focusable: false,
+    alwaysOnTop: true,
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  win.setIgnoreMouseEvents(true);
+  win.setContentProtection(true); // keep the badge out of the capture
+  win.setAlwaysOnTop(true, 'screen-saver');
+  if (isMac) win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreenWindows: true });
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'scene-indicator.html'), { query: { scene } });
+  // Re-apply the current scene once the page's script is ready, so a switch that
+  // fires before load doesn't leave the badge stale.
+  win.webContents.on('did-finish-load', () => {
+    if (recSession && recSession.currentScene) updateSceneIndicator(recSession.currentScene);
+  });
+  win.on('closed', () => { if (sceneIndicatorWin === win) sceneIndicatorWin = null; });
+  sceneIndicatorWin = win;
+}
+function updateSceneIndicator(scene) {
+  if (!sceneIndicatorWin || sceneIndicatorWin.isDestroyed()) return;
+  sceneIndicatorWin.webContents.executeJavaScript(
+    `window.setScene && window.setScene(${JSON.stringify(scene)})`
+  ).catch(() => {});
+}
+function hideSceneIndicator() {
+  if (sceneIndicatorWin) {
+    try { if (!sceneIndicatorWin.isDestroyed()) sceneIndicatorWin.close(); } catch (_) {}
+    sceneIndicatorWin = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // IPC: screen-recording permission (macOS)
 // ---------------------------------------------------------------------------
 ipcMain.handle('screen:status', async () => screenAccessStatus());
@@ -362,7 +446,7 @@ function endStream(stream) {
   });
 }
 
-ipcMain.handle('rec:start', async (_evt, { display, kind, region }) => {
+ipcMain.handle('rec:start', async (_evt, { display, kind, region, scene, transition }) => {
   const recBaseEpoch = Date.now();
   // Cursor coordinates only map cleanly onto a full-screen (or cropped-region)
   // capture. When a region is set, clicks are normalised relative to it.
@@ -381,16 +465,29 @@ ipcMain.handle('rec:start', async (_evt, { display, kind, region }) => {
     .slice(0, 19);
   const videoPath = path.join(RECORDINGS_DIR, `rec-${stamp}.webm`);
 
+  // Scene mode: `scene` is the starting scene ('screen'|'cam'|'both'); when set we
+  // log switches (F1/F2/F3) on the recBaseEpoch time axis and show the indicator.
+  const scenesOn = scene === 'screen' || scene === 'cam' || scene === 'both';
+
   recSession = {
     videoPath,
     cursorPath: path.join(RECORDINGS_DIR, `rec-${stamp}.cursor.json`),
     camPath: videoPath.replace(/\.webm$/, '.cam.webm'),
+    scenesPath: path.join(RECORDINGS_DIR, `rec-${stamp}.scenes.json`),
     display,
     region: region || null,
     recBaseEpoch,
     videoStream: fs.createWriteStream(videoPath),
     camStream: null,
+    scenes: scenesOn ? [{ t: 0, scene }] : null,
+    transition: scenesOn ? (Number(transition) || 0) : 0,
+    currentScene: scenesOn ? scene : null,
   };
+
+  if (scenesOn) {
+    registerSceneShortcuts();
+    showSceneIndicator(display, scene, region || null);
+  }
   return { recBaseEpoch };
 });
 
@@ -415,6 +512,10 @@ ipcMain.handle('rec:finish', async (_evt, { hasAudio }) => {
   await endStream(s.videoStream);
   await endStream(s.camStream);
 
+  // Scene mode ends with recording: stop the hotkeys + indicator and persist log.
+  unregisterSceneShortcuts();
+  hideSceneIndicator();
+
   const hasCam = !!s.camStream;
   fs.writeFileSync(
     s.cursorPath,
@@ -429,10 +530,19 @@ ipcMain.handle('rec:finish', async (_evt, { hasAudio }) => {
     })
   );
 
+  let scenesPath = null;
+  if (s.scenes && s.scenes.length) {
+    fs.writeFileSync(s.scenesPath, JSON.stringify({
+      recBaseEpoch: s.recBaseEpoch, transition: s.transition, events: s.scenes,
+    }));
+    scenesPath = s.scenesPath;
+  }
+
   currentProject = {
     videoPath: s.videoPath,
     cursorPath: s.cursorPath,
     camPath: hasCam ? s.camPath : null,
+    scenesPath,
     hasAudio,
     hasCam,
     display: s.display,
@@ -443,6 +553,8 @@ ipcMain.handle('rec:finish', async (_evt, { hasAudio }) => {
 
 ipcMain.handle('rec:abort', async () => {
   stopCursorTracking();
+  unregisterSceneShortcuts();
+  hideSceneIndicator();
   const s = recSession;
   recSession = null;
   if (s) {
@@ -572,7 +684,12 @@ ipcMain.handle('recordings:open', async (_evt, videoPath) => {
   if (hasAudio === undefined) hasAudio = await probeHasAudio(videoPath);
 
   const hasCam = fs.existsSync(camPath);
-  currentProject = { videoPath, cursorPath, camPath: hasCam ? camPath : null, hasAudio, hasCam, display: meta.display, recBaseEpoch: meta.recBaseEpoch };
+  const scenesPath = videoPath.replace(/\.webm$/, '.scenes.json');
+  currentProject = {
+    videoPath, cursorPath, camPath: hasCam ? camPath : null,
+    scenesPath: fs.existsSync(scenesPath) ? scenesPath : null,
+    hasAudio, hasCam, display: meta.display, recBaseEpoch: meta.recBaseEpoch,
+  };
 
   resetMediaSources();
   loadEditor();
@@ -592,6 +709,11 @@ ipcMain.handle('project:get', async () => {
   const cursor = JSON.parse(fs.readFileSync(currentProject.cursorPath, 'utf8'));
   // Register the recording as the timeline's first media source.
   mediaSources.rec = { path: currentProject.videoPath, hasAudio: currentProject.hasAudio, kind: 'recording' };
+  // Scene switches (screen/cam/both), if this recording used scene mode.
+  let scenes = null;
+  if (currentProject.scenesPath) {
+    try { scenes = JSON.parse(fs.readFileSync(currentProject.scenesPath, 'utf8')); } catch (_) {}
+  }
   return {
     recording: {
       id: 'rec',
@@ -602,6 +724,7 @@ ipcMain.handle('project:get', async () => {
       hasCam: currentProject.hasCam,
       display: currentProject.display,
       cursor,
+      scenes,
     },
   };
 });

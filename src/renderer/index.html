@@ -134,6 +134,23 @@
         <span class="status" id="camStatus"></span>
       </div>
 
+      <div id="scenesBox" class="cam-controls-row">
+        <label class="switch"><input type="checkbox" id="scenesEnabled" /> المشاهد (تبديل مباشر)</label>
+        <div class="field" id="sceneStartWrap" style="display:none">
+          <label for="sceneStart">المشهد الابتدائي</label>
+          <select id="sceneStart">
+            <option value="screen">🖥 الشاشة (F1)</option>
+            <option value="both" selected>🖥+🎥 كلاهما (F3)</option>
+            <option value="cam">🎥 الكاميرا (F2)</option>
+          </select>
+        </div>
+        <div class="slider" id="sceneTransWrap" style="display:none">
+          <span>الانتقال: <b id="sceneTransVal">0.3</b>ث</span>
+          <input type="range" id="sceneTrans" min="0" max="1" step="0.05" value="0.3" />
+        </div>
+        <span class="status" id="scenesHint" style="display:none">أثناء التسجيل: <b>F1</b> شاشة · <b>F2</b> كاميرا · <b>F3</b> كلاهما</span>
+      </div>
+
       <p class="hint">
         نصيحة: اختر الشاشة ثم اضغط <b>بدء التسجيل</b> في الأعلى. تُتتبَّع حركات المؤشر ونقراته
         تلقائيًا ليتمكّن المحرر من إضافة تكبير سلس.

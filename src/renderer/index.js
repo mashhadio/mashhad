@@ -37,6 +37,14 @@ const blurAmountVal = document.getElementById('blurAmountVal');
 const blurAmountWrap = document.getElementById('blurAmountWrap');
 const camStatus = document.getElementById('camStatus');
 
+const scenesEnabled = document.getElementById('scenesEnabled');
+const sceneStart = document.getElementById('sceneStart');
+const sceneStartWrap = document.getElementById('sceneStartWrap');
+const sceneTrans = document.getElementById('sceneTrans');
+const sceneTransVal = document.getElementById('sceneTransVal');
+const sceneTransWrap = document.getElementById('sceneTransWrap');
+const scenesHint = document.getElementById('scenesHint');
+
 let selectedSource = null;
 let mediaRecorder = null;
 let camRecorder = null;
@@ -508,6 +516,24 @@ blurAmount.addEventListener('input', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Scenes (F1/F2/F3 switching while recording)
+// ---------------------------------------------------------------------------
+function updateScenesUI() {
+  const on = scenesEnabled.checked;
+  sceneStartWrap.style.display = on ? '' : 'none';
+  sceneTransWrap.style.display = on ? 'flex' : 'none';
+  scenesHint.style.display = on ? '' : 'none';
+  // cam/both scenes need the webcam, so scene mode forces the camera on.
+  if (on && !camEnabled.disabled && !camEnabled.checked) {
+    camEnabled.checked = true;
+    startCamPreview();
+  }
+}
+scenesEnabled.addEventListener('change', () => { Prefs.set('scenes', scenesEnabled.checked); updateScenesUI(); });
+sceneStart.addEventListener('change', () => Prefs.set('sceneStart', sceneStart.value));
+sceneTrans.addEventListener('input', () => { sceneTransVal.textContent = sceneTrans.value; Prefs.set('sceneTrans', parseFloat(sceneTrans.value)); });
+
+// ---------------------------------------------------------------------------
 // Recording
 // ---------------------------------------------------------------------------
 function resetRecordingUI() {
@@ -615,10 +641,16 @@ async function startRecording() {
   // 1920×1080) so the saved file matches what YouTube/LinkedIn expect.
   const outSize = region ? fmt.out : null;
 
+  // Scene mode needs the webcam actually on (cam/both scenes would be black
+  // otherwise), so require it to be enabled and available.
+  const sceneMode = scenesEnabled.checked && camEnabled.checked && !camEnabled.disabled;
+  const scene = sceneMode ? sceneStart.value : null;
+  const transition = sceneMode ? parseFloat(sceneTrans.value) || 0 : 0;
+
   let recBaseEpoch;
   try {
     // Tell main to begin cursor tracking; it returns the time base.
-    ({ recBaseEpoch } = await window.api.startRecording({ display, kind, region }));
+    ({ recBaseEpoch } = await window.api.startRecording({ display, kind, region, scene, transition }));
 
     // Stop the live preview so we don't capture the screen twice at once
     // (that can drop frames in the actual recording).
@@ -908,6 +940,12 @@ function applyHomePrefs() {
 
   if (!camEnabled.disabled) camEnabled.checked = Prefs.get('camEnabled', false);
   if (camEnabled.checked) startCamPreview();
+
+  scenesEnabled.checked = Prefs.get('scenes', false);
+  sceneStart.value = Prefs.get('sceneStart', 'both');
+  sceneTrans.value = String(Prefs.get('sceneTrans', 0.3));
+  sceneTransVal.textContent = sceneTrans.value;
+  updateScenesUI();
 
   // Persist on change (these add to existing handlers).
   fpsSelect.addEventListener('change', () => { Prefs.set('fps', fpsSelect.value); renderPerfGuide(); });
