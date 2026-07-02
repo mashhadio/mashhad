@@ -126,9 +126,8 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false);
 
-  // Disable Chromium's whole-app zoom so only the in-app timeline zoom applies:
-  // pinch/visual zoom off, swallow the Ctrl/Cmd +/-/0 accelerators, and hard-reset
-  // any page zoom that still slips through (Ctrl+wheel) back to 100%.
+  // Disable Chromium's whole-app zoom (pinch, Ctrl/Cmd +/-/0, and Ctrl+wheel) so
+  // the recorder/editor UI never scales unexpectedly.
   const wc = mainWindow.webContents;
   wc.setVisualZoomLevelLimits(1, 1);
   wc.on('before-input-event', (e, input) => {

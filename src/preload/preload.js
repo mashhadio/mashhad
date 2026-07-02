@@ -2,8 +2,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Prevent Chromium's whole-app zoom on Ctrl/Cmd+wheel; the editor's own handler
-// still runs (preventDefault doesn't stop propagation) so timeline zoom works.
+// Prevent Chromium's whole-app zoom on Ctrl/Cmd+wheel so the UI never scales.
 window.addEventListener('wheel', (e) => {
   if (e.ctrlKey || e.metaKey) e.preventDefault();
 }, { passive: false, capture: true });

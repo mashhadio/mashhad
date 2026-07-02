@@ -18,8 +18,6 @@ const playhead = document.getElementById('playhead');
 const tlOverlays = document.getElementById('tlOverlays');
 const tlAudio = document.getElementById('tlAudio');
 const tlRuler = document.getElementById('tlRuler');
-const timelineScroll = document.getElementById('timelineScroll');
-const tlZoomRange = document.getElementById('tlZoomRange');
 const linkAudio = document.getElementById('linkAudio');
 const addTrackBtn = document.getElementById('addTrackBtn');
 const voBtn = document.getElementById('voBtn');
@@ -1165,14 +1163,7 @@ function updateTimeLabel() {
 // ---------------------------------------------------------------------------
 // Timeline rendering (edited time: positions come from cumulative clip lengths)
 // ---------------------------------------------------------------------------
-// Timeline zoom: the stack is widened to `viewport × zoomFactor`, so all the
-// existing `(t/total)*timeline.clientWidth` math keeps working — clientWidth just
-// becomes the zoomed content width — and the viewport scrolls horizontally.
-let zoomFactor = 1;
-function tlContentWidth() { return Math.max(1, (timelineScroll.clientWidth || 1) * zoomFactor); }
-function sizeTimeline() { timelineStack.style.width = tlContentWidth() + 'px'; }
-
-// Draw a seconds ruler with "nice" intervals (~every 70px) at the current zoom.
+// Draw a seconds ruler with "nice" intervals (~every 70px), fit to the timeline.
 let rulerKey = '';
 function buildRuler() {
   const total = editedDuration();
@@ -1201,23 +1192,15 @@ function buildRuler() {
   }
 }
 
-function applyZoom() {
-  sizeTimeline();
-  if (zoomFactor <= 1) timelineScroll.scrollLeft = 0; // fit view: nothing to scroll to
+// Rebuild + reposition the playhead (used on window resize).
+function relayoutTimeline() {
   buildTimeline();
   movePlayhead(playheadEdited);
-}
-// Coalesce rapid zoom/resize events into one rebuild per frame.
-let zoomRaf = 0;
-function scheduleZoom() {
-  if (zoomRaf) return;
-  zoomRaf = requestAnimationFrame(() => { zoomRaf = 0; applyZoom(); });
 }
 
 function buildTimeline() {
   [...timeline.querySelectorAll('.block, .click-tick, .clip')].forEach((n) => n.remove());
   transSnapIdx = -1; // any pending transition snapshot is stale after a rebuild
-  sizeTimeline();
   const w = timeline.clientWidth;
   const total = editedDuration() || 1;
 
@@ -1363,15 +1346,7 @@ function buildOverlayRows() {
 }
 
 function movePlayhead(te) {
-  const x = (te / (editedDuration() || 1)) * timeline.clientWidth;
-  playhead.style.left = `${x}px`;
-  // Keep the playhead in view while zoomed in (auto-scroll during playback/seek).
-  if (zoomFactor > 1) {
-    const vw = timelineScroll.clientWidth;
-    const sl = timelineScroll.scrollLeft;
-    if (x < sl + 40) timelineScroll.scrollLeft = Math.max(0, x - 40);
-    else if (x > sl + vw - 40) timelineScroll.scrollLeft = x - vw + 40;
-  }
+  playhead.style.left = `${(te / (editedDuration() || 1)) * timeline.clientWidth}px`;
 }
 
 // Redraw once the element's async seek lands, so scrubbing across sources shows
@@ -2487,28 +2462,8 @@ addTrackBtn.addEventListener('click', addOverlayTrack);
 voBtn.addEventListener('click', toggleVoiceOver);
 importAudioBtn.addEventListener('click', importAudioFiles);
 
-// Timeline zoom: slider + Ctrl/Cmd+wheel (zoom toward the cursor).
-tlZoomRange.addEventListener('input', () => { zoomFactor = parseFloat(tlZoomRange.value) || 1; scheduleZoom(); });
-timelineScroll.addEventListener('wheel', (e) => {
-  if (!e.ctrlKey && !e.metaKey) return; // let normal (non-modifier) wheel scroll
-  e.preventDefault();
-  const total = editedDuration() || 1;
-  const rect = timeline.getBoundingClientRect();
-  const tAtCursor = ((e.clientX - rect.left) / (timeline.clientWidth || 1)) * total;
-  const old = zoomFactor;
-  zoomFactor = clamp(zoomFactor * (e.deltaY < 0 ? 1.15 : 1 / 1.15), 1, 20);
-  if (zoomFactor === old) return;
-  tlZoomRange.value = String(zoomFactor);
-  sizeTimeline();
-  buildTimeline();
-  const newX = (tAtCursor / total) * timeline.clientWidth;
-  const viewportX = e.clientX - timelineScroll.getBoundingClientRect().left;
-  timelineScroll.scrollLeft = Math.max(0, newX - viewportX);
-  movePlayhead(playheadEdited);
-}, { passive: false });
-
-// Reflow the timeline (and fit-width) when the window resizes (throttled).
-window.addEventListener('resize', () => { if (clips.length || allOverlayClips().length || allAudioClips().length) scheduleZoom(); });
+// Reflow the fit-to-width timeline when the window resizes.
+window.addEventListener('resize', () => { if (clips.length) relayoutTimeline(); });
 
 // Link/unlink the recording's audio from its video (detach onto an audio track).
 linkAudio.addEventListener('change', () => {
