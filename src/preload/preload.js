@@ -37,6 +37,10 @@ contextBridge.exposeInMainWorld('api', {
   openStudio: () => ipcRenderer.invoke('studio:open'),
   importVideos: () => ipcRenderer.invoke('source:import'),
 
+  // voice-over: persist a recorded mic blob and register it as an audio source
+  saveVoiceOver: (buf) => ipcRenderer.invoke('voiceover:save', buf),
+  importAudio: () => ipcRenderer.invoke('source:importAudio'),
+
   // editor
   getProject: () => ipcRenderer.invoke('project:get'),
   previewAudio: (profile) => ipcRenderer.invoke('audio:preview', profile),

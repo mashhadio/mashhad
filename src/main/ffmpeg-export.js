@@ -179,9 +179,11 @@ function buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourc
     if (s && s.hasAudio) {
       const pad = used[c.sourceId].queue.shift();
       const denoise = c.sourceId === recordingSourceId && noiseChain ? `,${noiseChain}` : '';
-      parts.push(`${pad}atrim=start=${(+c.start).toFixed(3)}:end=${(+c.end).toFixed(3)},asetpts=PTS-STARTPTS${denoise},${STEREO}${seg}`);
+      const tempo = atempoChain(c.speed);
+      parts.push(`${pad}atrim=start=${(+c.start).toFixed(3)}:end=${(+c.end).toFixed(3)},asetpts=PTS-STARTPTS${tempo ? ',' + tempo : ''}${denoise},${STEREO}${seg}`);
     } else {
-      const len = Math.max(0.001, c.end - c.start).toFixed(3);
+      // Silent gap: its timeline length is the source range divided by speed.
+      const len = Math.max(0.001, (c.end - c.start) / (Number(c.speed) || 1)).toFixed(3);
       parts.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${len},asetpts=PTS-STARTPTS${seg}`);
     }
     segLabels.push(seg);
@@ -200,9 +202,24 @@ function buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourc
  * applying the chosen noise-reduction chain and optional click sounds, then
  * encode to the requested format.
  */
+// Build an atempo filter chain for an arbitrary speed factor. atempo only
+// accepts 0.5–2.0 per instance, so out-of-range speeds are split into a chain
+// (e.g. 4× → atempo=2,atempo=2). Empty string when speed is ~1.
+function atempoChain(speed) {
+  speed = Number(speed) || 1;
+  if (Math.abs(speed - 1) < 1e-3) return '';
+  const factors = [];
+  let r = speed;
+  while (r > 2) { factors.push(2); r /= 2; }
+  while (r < 0.5) { factors.push(0.5); r *= 2; }
+  factors.push(r);
+  return factors.map((f) => `atempo=${f.toFixed(5)}`).join(',');
+}
+
 async function exportVideo({
   zoomedVideoPath,
   clips = null,
+  overlayClips = [],
   sources = {},
   recordingSourceId = null,
   noiseProfile,
@@ -306,7 +323,8 @@ async function exportVideo({
         }
         const labels = [];
         cutSegs.forEach((s, i) => {
-          parts.push(`${ins[i]}atrim=start=${(+s.start).toFixed(3)}:end=${(+s.end).toFixed(3)},asetpts=PTS-STARTPTS[vc${i}]`);
+          const tempo = atempoChain(s.speed);
+          parts.push(`${ins[i]}atrim=start=${(+s.start).toFixed(3)}:end=${(+s.end).toFixed(3)},asetpts=PTS-STARTPTS${tempo ? ',' + tempo : ''}[vc${i}]`);
           labels.push(`[vc${i}]`);
         });
         parts.push(`${labels.join('')}concat=n=${n}:v=0:a=1[vcut]`);
@@ -321,24 +339,58 @@ async function exportVideo({
     voiceLabel = buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourceId, noiseChain);
   }
 
-  if (useClicks) {
-    const clickIdx = addInput(clickSfxFile(clickSoundName));
-    const mixIns = [];
+  // ---- Overlay-track audio: each clip trimmed from its source, sped (atempo),
+  // delayed to its timeline position, and folded into the final mix. -----------
+  const STEREO = 'aformat=sample_rates=48000:channel_layouts=stereo';
+  const MAX_OVERLAY_AUDIO = 200; // bound the filtergraph size (cf. MAX_CLICKS)
+  const overlayLabels = [];
+  (Array.isArray(overlayClips) ? overlayClips : []).forEach((c, i) => {
+    const s = sources[c.sourceId];
+    if (!s || !s.hasAudio) return;               // silent overlay contributes nothing
+    if (!(+c.end > +c.start)) return;            // skip degenerate/zero-length clips
+    if (overlayLabels.length >= MAX_OVERLAY_AUDIO) return;
+    const idx = addInput(s.path);
+    const tempo = atempoChain(c.speed);
+    const den = c.voice && noiseChain ? ',' + noiseChain : ''; // denoise recorded voice-over
+    const vol = Math.max(0, Math.min(4, c.gain != null ? c.gain : 1)).toFixed(2);
+    const ms = Math.max(0, Math.round((c.pos || 0) * 1000));
+    const lbl = `[ov${i}]`;
+    parts.push(
+      `[${idx}:a]atrim=start=${(+c.start).toFixed(3)}:end=${(+c.end).toFixed(3)},asetpts=PTS-STARTPTS`
+      + `${den}${tempo ? ',' + tempo : ''},volume=${vol},adelay=${ms}|${ms},${STEREO}${lbl}`
+    );
+    overlayLabels.push(lbl);
+  });
+
+  // Overlays and click SFX both require a timed mix onto a silent base. When they
+  // are present everything is mixed in stereo (overlays are stereo-formatted).
+  const needsMix = useClicks || overlayLabels.length > 0;
+  if (needsMix) {
+    if (overlayLabels.length) chLayout = 'stereo';
     const dur = durationSec > 0 ? durationSec.toFixed(3) : 3600;
+    const mixIns = [];
     parts.push(`anullsrc=r=48000:cl=${chLayout}:d=${dur}[base]`);
     mixIns.push('[base]');
-    if (voiceLabel) mixIns.push(voiceLabel);
+    if (voiceLabel) {
+      // Match the base layout so amix doesn't up/down-mix unexpectedly.
+      parts.push(`${voiceLabel}aformat=sample_rates=48000:channel_layouts=${chLayout}[voicem]`);
+      mixIns.push('[voicem]');
+    }
+    mixIns.push(...overlayLabels);
 
-    const splitOuts = clicks.map((_, i) => `[c${i}]`).join('');
-    parts.push(`[${clickIdx}:a]asplit=${clicks.length}${splitOuts}`);
-    clicks.forEach((tc, i) => {
-      const ms = Math.max(0, Math.round(tc * 1000));
-      const vol = Math.max(0, Math.min(2, clickVolume)).toFixed(2);
-      parts.push(`[c${i}]adelay=${ms}|${ms},volume=${vol},aformat=sample_rates=48000:channel_layouts=${chLayout}[cd${i}]`);
-      mixIns.push(`[cd${i}]`);
-    });
+    if (useClicks) {
+      const clickIdx = addInput(clickSfxFile(clickSoundName));
+      const splitOuts = clicks.map((_, i) => `[c${i}]`).join('');
+      parts.push(`[${clickIdx}:a]asplit=${clicks.length}${splitOuts}`);
+      clicks.forEach((tc, i) => {
+        const ms = Math.max(0, Math.round(tc * 1000));
+        const vol = Math.max(0, Math.min(2, clickVolume)).toFixed(2);
+        parts.push(`[c${i}]adelay=${ms}|${ms},volume=${vol},aformat=sample_rates=48000:channel_layouts=${chLayout}[cd${i}]`);
+        mixIns.push(`[cd${i}]`);
+      });
+    }
+
     parts.push(`${mixIns.join('')}amix=inputs=${mixIns.length}:normalize=0:dropout_transition=0[aout]`);
-
     args.push('-filter_complex', parts.join(';'));
     args.push('-map', '[vout]', '-map', '[aout]', ...vEnc, ...aEnc);
   } else if (voiceLabel) {

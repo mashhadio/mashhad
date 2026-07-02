@@ -380,10 +380,6 @@ kbd {
   border-radius: var(--r-md);
   overflow: hidden;
 }
-.timeline .playhead {
-  position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent);
-  pointer-events: none; z-index: 5;
-}
 .timeline .block {
   position: absolute; top: 4px; height: 17px; z-index: 3;
   background: linear-gradient(180deg, rgba(34,211,238,0.85), rgba(34,211,238,0.5));
@@ -466,6 +462,78 @@ kbd {
 .timeline .clip.import.src-d { background: linear-gradient(180deg, rgba(236,72,153,0.20), rgba(236,72,153,0.07)); border-color: rgba(236,72,153,0.42); }
 .timeline .clip.import.src-e { background: linear-gradient(180deg, rgba(16,185,129,0.20), rgba(16,185,129,0.07)); border-color: rgba(16,185,129,0.42); }
 .timeline .clip.import.src-f { background: linear-gradient(180deg, rgba(96,165,250,0.20), rgba(96,165,250,0.07)); border-color: rgba(96,165,250,0.42); }
+
+/* ---- Multi-track timeline (overlay video layers above the main track) ---- */
+.timeline-stack { flex: 1; position: relative; display: flex; flex-direction: column; gap: 5px; }
+.timeline-stack .timeline { flex: none; width: 100%; }
+.tl-overlays { display: flex; flex-direction: column; gap: 5px; }
+.timeline-stack > .playhead {
+  position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent);
+  pointer-events: none; z-index: 20;
+}
+.tl-addtrack { white-space: nowrap; align-self: flex-start; }
+/* An overlay track row. Higher rows draw on top of the main video. */
+.tl-row {
+  position: relative; height: 32px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--r-md); overflow: hidden;
+}
+.tl-row.drop-target, .timeline.drop-target { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.tl-row-label {
+  position: absolute; top: 2px; left: 4px; z-index: 2;
+  font-size: 9px; color: var(--muted); pointer-events: none; user-select: none; opacity: 0.7;
+}
+.tl-row-del {
+  position: absolute; top: 2px; right: 3px; z-index: 4;
+  width: 15px; height: 15px; padding: 0; display: none;
+  align-items: center; justify-content: center; border: none; border-radius: 50%;
+  background: rgba(0,0,0,0.5); color: #fff; font-size: 9px; line-height: 1; cursor: pointer;
+}
+.tl-row:hover .tl-row-del { display: flex; }
+.tl-row-del:hover { background: #ff5563; }
+/* Overlay clip: violet-tinted so it reads apart from the main track. */
+.oclip {
+  position: absolute; top: 2px; bottom: 2px; z-index: 1; box-sizing: border-box;
+  background: linear-gradient(180deg, rgba(139,92,246,0.30), rgba(139,92,246,0.12));
+  border: 1px solid rgba(139,92,246,0.55); border-radius: var(--r-sm);
+  display: flex; align-items: center; justify-content: center;
+  cursor: grab; overflow: hidden;
+  transition: box-shadow var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.oclip.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), 0 2px 12px rgba(16,185,129,0.45); }
+.oclip.dragging { z-index: 30; cursor: grabbing; opacity: 0.9; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
+.oclip .clip-label { font-size: 11px; color: #ddd6fe; pointer-events: none; font-variant-numeric: tabular-nums; user-select: none; }
+.oclip .clip-delete {
+  position: absolute; top: 3px; right: 3px; width: 16px; height: 16px; padding: 0;
+  display: none; align-items: center; justify-content: center; border: none; border-radius: 50%;
+  background: rgba(0,0,0,0.5); color: #fff; font-size: 9px; line-height: 1; cursor: pointer;
+}
+.oclip:hover .clip-delete, .oclip.selected .clip-delete { display: flex; }
+.oclip .clip-delete:hover { background: #ff5563; }
+
+/* ---- Audio tracks (voice-over / audio clips), rendered below the main track ---- */
+.tl-audio { display: flex; flex-direction: column; gap: 5px; }
+.tl-actions { display: flex; flex-direction: column; gap: 6px; align-self: flex-start; }
+#voBtn.recording { background: #ef4444; color: #fff; border-color: #ef4444; }
+/* Audio clip: amber-tinted with a waveform-ish feel. */
+.aclip {
+  position: absolute; top: 2px; bottom: 2px; z-index: 1; box-sizing: border-box;
+  background: linear-gradient(180deg, rgba(224,179,65,0.32), rgba(224,179,65,0.12));
+  border: 1px solid rgba(224,179,65,0.55); border-radius: var(--r-sm);
+  display: flex; align-items: center; justify-content: center;
+  cursor: grab; overflow: hidden;
+  transition: box-shadow var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.aclip.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), 0 2px 12px rgba(16,185,129,0.45); }
+.aclip.dragging { z-index: 30; cursor: grabbing; opacity: 0.9; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
+.aclip .clip-label { font-size: 11px; color: #fde68a; pointer-events: none; font-variant-numeric: tabular-nums; user-select: none; }
+.aclip .clip-delete {
+  position: absolute; top: 3px; right: 3px; width: 16px; height: 16px; padding: 0;
+  display: none; align-items: center; justify-content: center; border: none; border-radius: 50%;
+  background: rgba(0,0,0,0.5); color: #fff; font-size: 9px; line-height: 1; cursor: pointer;
+}
+.aclip:hover .clip-delete, .aclip.selected .clip-delete { display: flex; }
+.aclip .clip-delete:hover { background: #ff5563; }
 
 /* "Import to begin" overlay shown over an empty studio stage. */
 .stage-placeholder {

@@ -15,6 +15,11 @@ const playBtn = document.getElementById('playBtn');
 const timeLabel = document.getElementById('timeLabel');
 const timeline = document.getElementById('timeline');
 const playhead = document.getElementById('playhead');
+const tlOverlays = document.getElementById('tlOverlays');
+const tlAudio = document.getElementById('tlAudio');
+const addTrackBtn = document.getElementById('addTrackBtn');
+const voBtn = document.getElementById('voBtn');
+const importAudioBtn = document.getElementById('importAudioBtn');
 
 const autoZoomBtn = document.getElementById('autoZoomBtn');
 const addZoomBtn = document.getElementById('addZoomBtn');
@@ -23,6 +28,9 @@ const splitBtn = document.getElementById('splitBtn');
 const undoBtn = document.getElementById('undoBtn');
 const redoBtn = document.getElementById('redoBtn');
 const clipTransition = document.getElementById('clipTransition');
+const speedGroup = document.getElementById('speedGroup');
+const speedRange = document.getElementById('speedRange');
+const speedVal = document.getElementById('speedVal');
 const zoomLevel = document.getElementById('zoomLevel');
 const zoomLevelVal = document.getElementById('zoomLevelVal');
 const zoomLevelLabel = document.getElementById('zoomLevelLabel');
@@ -95,6 +103,33 @@ let playIdx = 0;            // index of the clip currently at the playhead
 let playheadEdited = 0;     // playhead position in edited time (seconds)
 let drawClipIdx = 0;        // clip index the current frame belongs to
 
+// ---------------------------------------------------------------------------
+// Overlay video tracks (CapCut-style layering). The main track (`clips`) plays
+// as before; overlay clips are positioned in EDITED time (`pos`) within the main
+// timeline, and at any instant the TOP-most overlay clip covering the playhead
+// is drawn full-frame over the main video ("the top layer is what shows").
+// `speed` is carried on every clip for Phase 2 (default 1); `pos`/len are in
+// edited seconds. Overlay clips reference `sources` by `sourceId` like main clips.
+// ---------------------------------------------------------------------------
+let overlayTracks = []; // [{ id, clips: [{ id, sourceId, start, end, pos, speed }] }]
+let overlayClipSeq = 0;
+let overlayTrackSeq = 0;
+let selectedOverlay = null; // { clipId } or null
+// Each overlay clip gets its OWN hidden <video> (keyed by clip id) so it never
+// fights the main `video` element or another overlay clip from the same source.
+const overlayEls = new Map();
+
+// Audio tracks (voice-over / audio clips), rendered below the main track. Not
+// drawn — mixed into the export and played through per-clip <audio> elements in
+// preview. Clips carry `pos`/`speed`/`gain` and `voice:true` for recorded VO.
+let audioTracks = []; // [{ id, clips: [{ id, sourceId, start, end, pos, speed, gain, voice }] }]
+let audioClipSeq = 0;
+let audioTrackSeq = 0;
+let selectedAudio = null; // { clipId } or null
+const audioEls = new Map(); // clipId -> <audio>
+let voState = null; // active voice-over recording: { recorder, chunks, startPos, stream, startTime }
+let voArming = false; // true between the VO click and the mic stream resolving
+
 // Clip transitions. Each clip can carry an intro `transition` ({type,duration})
 // describing how it enters from the previous clip — so it follows the clip on
 // reorder. We render it without a second decoder: when playback leaves a clip we
@@ -117,6 +152,7 @@ let playing = false;
 // clip-end test could read that stale value and skip the new clip outright.
 let mediaSeeking = false;
 let exporting = false;
+let capturing = false; // true only during the export canvas-capture pass
 let camReady = false;
 
 // Cleaned-audio preview: plays the ffmpeg-denoised mic in sync with the video so
@@ -348,6 +384,85 @@ function drawImportFrame(el, scale = 1) {
   const cropW = vw / scale, cropH = vh / scale;
   const sx = (vw - cropW) / 2, sy = (vh - cropH) / 2;
   ctx.drawImage(el, sx, sy, cropW, cropH, dx, dy, dw, dh);
+}
+
+// Draw an element covering the whole canvas (center-crop, "cover" fit) — overlay
+// layers fully replace what's beneath them, matching "the top layer shows".
+function drawElementCover(el) {
+  const W = canvas.width, H = canvas.height, vw = el.videoWidth, vh = el.videoHeight;
+  if (!vw || !vh) return;
+  const cover = Math.max(W / vw, H / vh);
+  const dw = vw * cover, dh = vh * cover;
+  ctx.drawImage(el, 0, 0, vw, vh, (W - dw) / 2, (H - dh) / 2, dw, dh);
+}
+
+// The dedicated hidden <video> for an overlay clip (created on first use).
+function overlayElFor(c) {
+  let el = overlayEls.get(c.id);
+  if (!el) {
+    const s = sourceById(c.sourceId);
+    if (!s || !s.url) return null;
+    el = document.createElement('video');
+    el.src = s.url;
+    el.muted = true;
+    el.playsInline = true;
+    el.preload = 'auto';
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    overlayEls.set(c.id, el);
+  }
+  return el;
+}
+
+// Drop overlay elements whose clip no longer exists (called after each rebuild).
+function pruneOverlayEls() {
+  const ids = new Set(allOverlayClips().map((c) => c.id));
+  overlayEls.forEach((el, id) => {
+    if (!ids.has(id)) { try { el.pause(); el.remove(); } catch (_) {} overlayEls.delete(id); }
+  });
+}
+
+function pauseOverlayEls() { overlayEls.forEach((el) => { if (!el.paused) el.pause(); }); }
+
+// Composite the top-most overlay clip covering edited time `te` over the canvas.
+function drawOverlays(te) {
+  const hit = overlayClipAt(te);
+  if (!hit) return;
+  const el = overlayElFor(hit.clip);
+  if (el && el.videoWidth) drawElementCover(el);
+}
+
+// Keep each overlay clip's dedicated element seeked/playing to match the
+// playhead. Elements not currently covering the playhead are paused.
+function updateOverlayPlayback(te) {
+  const isPlaying = playing || capturing;
+  const active = new Set();
+  overlayTracks.forEach((trk) => {
+    const c = overlayCoveringOnTrack(trk, te);
+    if (!c) return;
+    const s = sourceById(c.sourceId);
+    const el = overlayElFor(c);
+    if (!el) return;
+    active.add(el);
+    const want = srcTimeOf(c, te);
+    el.playbackRate = c.speed || 1;
+    el.muted = capturing ? true : !(s && s.hasAudio); // element audio is never captured
+    if (isPlaying) {
+      if (el.paused) { try { el.currentTime = want; } catch (_) {} el.play().catch(() => {}); }
+      else if (Math.abs(el.currentTime - want) > 0.3) { try { el.currentTime = want; } catch (_) {} }
+    } else {
+      if (!el.paused) el.pause();
+      if (Math.abs(el.currentTime - want) > 0.05) {
+        try { el.currentTime = want; } catch (_) {}
+        // Redraw once the (async) overlay seek lands so a paused scrub is crisp.
+        // Capture `te` so a later seek can't retarget this redraw.
+        el.addEventListener('seeked', () => {
+          if (!playing && !capturing) { drawAt(video.currentTime); drawOverlays(te); }
+        }, { once: true });
+      }
+    }
+  });
+  overlayEls.forEach((el) => { if (!active.has(el) && !el.paused) el.pause(); });
 }
 
 // Toggle the "import to begin" overlay + export availability for an empty studio.
@@ -770,7 +885,11 @@ function gotoClipMedia(idx) {
   const c = clips[idx];
   if (!c) return;
   setActiveEl(c.sourceId);
+  const sp = c.speed || 1;
+  video.playbackRate = sp;
   const isRec = activeIsRecording();
+  if (isRec && camReady) camVideo.playbackRate = sp;
+  if (isRec && cleanAudioActive) cleanAudio.playbackRate = sp;
   if (camReady) {
     if (isRec) camVideo.currentTime = Math.min(c.start, camVideo.duration || c.start);
     else camVideo.pause();
@@ -812,6 +931,8 @@ function renderLoop() {
   const c = clips[playIdx];
   if (!c) { pause(); return; }
   drawClipIdx = playIdx;
+  const sp = c.speed || 1;
+  if (video.playbackRate !== sp) video.playbackRate = sp; // per-clip speed
 
   // A clip-advance seek is still settling: draw the current frame and wait, so a
   // stale currentTime can't be mistaken for reaching this clip's end.
@@ -822,7 +943,9 @@ function renderLoop() {
   }
 
   // Reached the end of the current clip -> move to the next in edit order.
-  if (video.ended || video.currentTime >= c.end - SEAM) {
+  // The lead is in SOURCE seconds, so scale by speed to keep the edited-time
+  // lead constant (a slow clip must not lose a chunk of its tail).
+  if (video.ended || video.currentTime >= c.end - SEAM * sp) {
     snapshotOutgoing(playIdx + 1); // freeze this frame for the next clip's transition
     const next = clips[playIdx + 1];
     // Only keep rolling without a seek when the next clip continues the SAME
@@ -843,13 +966,18 @@ function renderLoop() {
   }
 
   drawAt(video.currentTime);
-  playheadEdited = clamp(editedStartOf(playIdx) + (video.currentTime - c.start), 0, editedDuration());
+  playheadEdited = clamp(editedStartOf(playIdx) + (video.currentTime - c.start) / sp, 0, editedDuration());
+  updateOverlayPlayback(playheadEdited);
+  drawOverlays(playheadEdited);
+  updateAudioTrackPlayback(playheadEdited);
   movePlayhead(playheadEdited);
   updateTimeLabel();
 
   // Keep the recording-only aux tracks (webcam, cleaned mic) in step with
   // playback, and idle them while an imported clip is on screen.
   if (activeIsRecording()) {
+    if (camReady) camVideo.playbackRate = sp;
+    if (cleanAudioActive) cleanAudio.playbackRate = sp;
     playClickSounds(video.currentTime);
     if (camReady && camVideo.paused) camVideo.play().catch(() => {});
     if (cleanAudioActive) {
@@ -899,6 +1027,12 @@ function pause() {
   if (video) video.pause();
   if (camReady) camVideo.pause();
   cleanAudio.pause();
+  pauseOverlayEls();
+  pauseAudioEls();
+  // Stopping playback ends an in-progress voice-over (e.g. the timeline hit its
+  // end) so the recorder never runs on past the timeline. stop() is synchronous
+  // about state, so finishVoiceOver fires once via onstop.
+  if (voState && voState.recorder && voState.recorder.state !== 'inactive') voState.recorder.stop();
   playBtn.textContent = '▶ تشغيل';
   if (rafId) cancelAnimationFrame(rafId);
 }
@@ -936,14 +1070,15 @@ function buildTimeline() {
       + (isImport ? ' import' : '') + (sourceColors[c.sourceId] ? ' ' + sourceColors[c.sourceId] : '');
     el.dataset.cidx = ci;
     el.style.left = `${(editedStartOf(ci) / total) * w}px`;
-    el.style.width = `${(clipLen(c) / total) * w}px`;
+    el.style.width = `${(clipTLen(c) / total) * w}px`;
     const transLabel = hasTrans ? (TRANSITION_LABELS[c.transition.type] || c.transition.type) : '';
     const srcName = src ? src.name : '';
+    const spd = (c.speed || 1) !== 1 ? ` · ${(c.speed).toFixed(2)}×` : '';
     el.title = (isImport ? `${srcName} · ` : '')
       + (hasTrans ? `انتقال ${transLabel} · ` : '')
       + 'اسحب لإعادة الترتيب · ✕ أو Delete للحذف';
     const badge = hasTrans ? `<span class="clip-trans" title="انتقال ${transLabel}">▶</span>` : '';
-    el.innerHTML = `${badge}<span class="clip-label">${fmt(clipLen(c))}</span><button class="clip-delete" title="حذف المقطع" tabindex="-1">✕</button>`;
+    el.innerHTML = `${badge}<span class="clip-label">${fmt(clipTLen(c))}${spd}</span><button class="clip-delete" title="حذف المقطع" tabindex="-1">✕</button>`;
     el.querySelector('.clip-delete').addEventListener('mousedown', (e) => e.stopPropagation());
     el.querySelector('.clip-delete').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -971,8 +1106,9 @@ function buildTimeline() {
       const s = Math.max(b.start, c.start);
       const e = Math.min(b.end, c.end);
       if (e <= s + 1e-3) return;
-      const es = editedStartOf(ci) + (s - c.start);
-      const ee = editedStartOf(ci) + (e - c.start);
+      const sp = c.speed || 1; // source range -> edited width shrinks with speed
+      const es = editedStartOf(ci) + (s - c.start) / sp;
+      const ee = editedStartOf(ci) + (e - c.start) / sp;
       const el = document.createElement('div');
       el.className = 'block' + (b === selectedBlock ? ' selected' : '');
       el.dataset.block = bi;
@@ -986,7 +1122,75 @@ function buildTimeline() {
     });
   });
 
+  buildOverlayRows();
+  buildAudioRows();
   updateTransitionControl();
+  updateSpeedControl();
+}
+
+// Render one row per audio track (voice-over / audio clips), below the main track.
+function buildAudioRows() {
+  tlAudio.innerHTML = '';
+  const w = timeline.clientWidth;
+  const total = editedDuration() || 1;
+  audioTracks.forEach((trk, ti) => {
+    const row = document.createElement('div');
+    row.className = 'tl-row';
+    row.dataset.atrack = ti;
+    row.innerHTML = `<span class="tl-row-label">صوت ${ti + 1}</span>`
+      + `<button class="tl-row-del" title="حذف مسار الصوت" tabindex="-1">✕</button>`;
+    row.querySelector('.tl-row-del').addEventListener('mousedown', (e) => e.stopPropagation());
+    row.querySelector('.tl-row-del').addEventListener('click', (e) => { e.stopPropagation(); deleteAudioTrack(trk.id); });
+    trk.clips.forEach((c) => {
+      const src = sourceById(c.sourceId);
+      const el = document.createElement('div');
+      el.className = 'aclip' + (selectedAudio && selectedAudio.clipId === c.id ? ' selected' : '');
+      el.dataset.clipId = c.id;
+      el.style.left = `${(c.pos / total) * w}px`;
+      el.style.width = `${Math.max(6, (clipTLen(c) / total) * w)}px`;
+      el.title = (src ? src.name + ' · ' : '') + 'اسحب للتحريك · ✕ للحذف';
+      const icon = c.voice ? '🎙 ' : '';
+      el.innerHTML = `<span class="clip-label">${icon}${fmt(clipTLen(c))}</span><button class="clip-delete" title="حذف" tabindex="-1">✕</button>`;
+      el.querySelector('.clip-delete').addEventListener('mousedown', (e) => e.stopPropagation());
+      el.querySelector('.clip-delete').addEventListener('click', (e) => { e.stopPropagation(); deleteAudioClip(c.id); });
+      row.appendChild(el);
+    });
+    tlAudio.appendChild(row);
+  });
+  pruneAudioEls();
+}
+
+// Render one row per overlay track (top-most track first, so it sits at the top
+// of the stack — matching the draw order where upper tracks cover lower ones).
+function buildOverlayRows() {
+  tlOverlays.innerHTML = '';
+  const w = timeline.clientWidth;
+  const total = editedDuration() || 1;
+  for (let ti = overlayTracks.length - 1; ti >= 0; ti--) {
+    const trk = overlayTracks[ti];
+    const row = document.createElement('div');
+    row.className = 'tl-row';
+    row.dataset.track = ti;
+    row.innerHTML = `<span class="tl-row-label">طبقة ${ti + 1}</span>`
+      + `<button class="tl-row-del" title="حذف الطبقة" tabindex="-1">✕</button>`;
+    row.querySelector('.tl-row-del').addEventListener('mousedown', (e) => e.stopPropagation());
+    row.querySelector('.tl-row-del').addEventListener('click', (e) => { e.stopPropagation(); deleteOverlayTrack(trk.id); });
+    trk.clips.forEach((c) => {
+      const src = sourceById(c.sourceId);
+      const el = document.createElement('div');
+      el.className = 'oclip' + (selectedOverlay && selectedOverlay.clipId === c.id ? ' selected' : '');
+      el.dataset.clipId = c.id;
+      el.style.left = `${(c.pos / total) * w}px`;
+      el.style.width = `${Math.max(6, (clipTLen(c) / total) * w)}px`;
+      el.title = (src ? src.name + ' · ' : '') + 'اسحب للتحريك · لأسفل للمسار الرئيسي · ✕ للحذف';
+      el.innerHTML = `<span class="clip-label">${fmt(clipTLen(c))}</span><button class="clip-delete" title="حذف" tabindex="-1">✕</button>`;
+      el.querySelector('.clip-delete').addEventListener('mousedown', (e) => e.stopPropagation());
+      el.querySelector('.clip-delete').addEventListener('click', (e) => { e.stopPropagation(); deleteOverlayClip(c.id); });
+      row.appendChild(el);
+    });
+    tlOverlays.appendChild(row);
+  }
+  pruneOverlayEls();
 }
 
 function movePlayhead(te) {
@@ -996,10 +1200,10 @@ function movePlayhead(te) {
 // Redraw once the element's async seek lands, so scrubbing across sources shows
 // the correct frame rather than the pre-seek one. No-op while playing (the
 // render loop already draws every frame).
-function redrawAfterSeek(el, t) {
+function redrawAfterSeek(el, t, te) {
   const onSeeked = () => {
     el.removeEventListener('seeked', onSeeked);
-    if (video === el && video.paused) drawAt(t);
+    if (video === el && video.paused) { drawAt(t); drawOverlays(te != null ? te : playheadEdited); }
   };
   el.addEventListener('seeked', onSeeked);
 }
@@ -1016,13 +1220,18 @@ function seekEdited(te) {
   transSnapIdx = -1; // a seek isn't a play-through; never composite a frozen frame
   playheadEdited = te;
   setActiveEl(m.clip.sourceId);
+  const sp = m.clip.speed || 1;
+  video.playbackRate = sp;
   const isRec = activeIsRecording();
-  if (isRec && camReady) camVideo.currentTime = Math.min(m.src, camVideo.duration || m.src);
-  if (isRec && cleanAudioActive) cleanAudio.currentTime = Math.min(m.src, cleanAudio.duration || m.src);
+  if (isRec && camReady) { camVideo.playbackRate = sp; camVideo.currentTime = Math.min(m.src, camVideo.duration || m.src); }
+  if (isRec && cleanAudioActive) { cleanAudio.playbackRate = sp; cleanAudio.currentTime = Math.min(m.src, cleanAudio.duration || m.src); }
   video.currentTime = m.src;
   lastFxTime = m.src;
   drawAt(m.src);
-  redrawAfterSeek(video, m.src);
+  updateOverlayPlayback(te);
+  drawOverlays(te);
+  updateAudioTrackPlayback(te);
+  redrawAfterSeek(video, m.src, te);
   movePlayhead(te);
   updateTimeLabel();
 }
@@ -1076,20 +1285,121 @@ timeline.addEventListener('mousedown', (e) => {
   if (clipEl) {
     const ci = +clipEl.dataset.cidx;
     selectBlock(null);
+    selectedOverlay = null;
+    selectedAudio = null;
     selectedClipId = clips[ci].id;
     // Toggle selection in place (don't rebuild — it would invalidate clipEl).
     [...timeline.querySelectorAll('.clip')].forEach((el) => el.classList.toggle('selected', +el.dataset.cidx === ci));
+    [...tlOverlays.querySelectorAll('.oclip')].forEach((el) => el.classList.remove('selected'));
     updateTransitionControl();
-    clipDrag = { idx: ci, el: clipEl, startX: e.clientX, moved: false, slot: ci };
+    updateSpeedControl();
+    clipDrag = { kind: 'main', idx: ci, id: clips[ci].id, el: clipEl, startX: e.clientX, startY: e.clientY, origPos: editedStartOf(ci), moved: false, slot: ci };
     seekEdited(((e.clientX - rect.left) / rect.width) * editedDuration());
     e.preventDefault();
     return;
   }
 
-  // Bare timeline (gaps) -> seek.
+  // Bare timeline (gaps) -> deselect everything and seek.
   selectBlock(null);
+  selectedOverlay = null;
+  selectedAudio = null;
+  selectedClipId = null;
+  [...timeline.querySelectorAll('.clip'), ...tlOverlays.querySelectorAll('.oclip'), ...tlAudio.querySelectorAll('.aclip')]
+    .forEach((el) => el.classList.remove('selected'));
+  updateTransitionControl();
+  updateSpeedControl();
   seekEdited(((e.clientX - rect.left) / rect.width) * editedDuration());
 });
+
+// Start dragging an overlay clip (move within/between overlay rows, or down to
+// the main track).
+tlOverlays.addEventListener('mousedown', (e) => {
+  if (exporting) return;
+  const oc = e.target.closest('.oclip');
+  if (!oc) return;
+  const id = +oc.dataset.clipId;
+  const found = findOverlayClip(id);
+  if (!found) return;
+  selectBlock(null);
+  selectOverlayClip(id);
+  [...tlOverlays.querySelectorAll('.oclip')].forEach((el) => el.classList.toggle('selected', +el.dataset.clipId === id));
+  [...timeline.querySelectorAll('.clip')].forEach((el) => el.classList.remove('selected'));
+  updateTransitionControl();
+  updateSpeedControl();
+  seekEdited(clamp(found.clip.pos + 0.001, 0, editedDuration()));
+  clipDrag = { kind: 'overlay', id, el: oc, startX: e.clientX, startY: e.clientY, origPos: found.clip.pos, moved: false, slot: clips.length };
+  e.preventDefault();
+});
+
+// Start dragging an audio clip (reposition within / move between audio rows).
+tlAudio.addEventListener('mousedown', (e) => {
+  if (exporting) return;
+  const ac = e.target.closest('.aclip');
+  if (!ac) return;
+  const id = +ac.dataset.clipId;
+  const found = findAudioClip(id);
+  if (!found) return;
+  selectBlock(null);
+  selectAudioClip(id);
+  [...tlAudio.querySelectorAll('.aclip')].forEach((el) => el.classList.toggle('selected', +el.dataset.clipId === id));
+  [...timeline.querySelectorAll('.clip')].forEach((el) => el.classList.remove('selected'));
+  [...tlOverlays.querySelectorAll('.oclip')].forEach((el) => el.classList.remove('selected'));
+  updateTransitionControl();
+  updateSpeedControl();
+  seekEdited(clamp(found.clip.pos + 0.001, 0, editedDuration()));
+  clipDrag = { kind: 'audio', id, el: ac, startX: e.clientX, startY: e.clientY, origPos: found.clip.pos, moved: false };
+  e.preventDefault();
+});
+
+// Which timeline row (main or an overlay track index) the pointer is over.
+function rowUnderPointer(clientY) {
+  for (const row of tlOverlays.querySelectorAll('.tl-row')) {
+    const r = row.getBoundingClientRect();
+    if (clientY >= r.top && clientY <= r.bottom) return { type: 'overlay', ti: +row.dataset.track };
+  }
+  const tr = timeline.getBoundingClientRect();
+  if (clientY <= tr.top && tlOverlays.children.length) {
+    const first = tlOverlays.querySelector('.tl-row');
+    if (first) return { type: 'overlay', ti: +first.dataset.track };
+  }
+  return { type: 'main' };
+}
+function timeAtClientX(clientX) {
+  const r = timeline.getBoundingClientRect();
+  const total = editedDuration() || 1;
+  return clamp(((clientX - r.left) / r.width) * total, 0, total);
+}
+function highlightDropRow(row) {
+  clearDropHighlight();
+  if (row.type === 'main') { timeline.classList.add('drop-target'); return; }
+  const el = [...tlOverlays.querySelectorAll('.tl-row')].find((r) => +r.dataset.track === row.ti);
+  if (el) el.classList.add('drop-target');
+}
+function clearDropHighlight() {
+  timeline.classList.remove('drop-target');
+  tlOverlays.querySelectorAll('.tl-row').forEach((r) => r.classList.remove('drop-target'));
+  tlAudio.querySelectorAll('.tl-row').forEach((r) => r.classList.remove('drop-target'));
+}
+
+// The audio track index under the pointer (clamped to the nearest row).
+function audioRowUnderPointer(clientY) {
+  const rows = [...tlAudio.querySelectorAll('.tl-row')];
+  for (const row of rows) {
+    const r = row.getBoundingClientRect();
+    if (clientY >= r.top && clientY <= r.bottom) return { ti: +row.dataset.atrack };
+  }
+  if (rows.length) {
+    const firstR = rows[0].getBoundingClientRect();
+    if (clientY < firstR.top) return { ti: +rows[0].dataset.atrack };
+    return { ti: +rows[rows.length - 1].dataset.atrack };
+  }
+  return { ti: 0 };
+}
+function highlightDropRowAudio(arow) {
+  clearDropHighlight();
+  const el = [...tlAudio.querySelectorAll('.tl-row')].find((r) => +r.dataset.atrack === arow.ti);
+  if (el) el.classList.add('drop-target');
+}
 
 window.addEventListener('mousemove', (e) => {
   if (drag) {
@@ -1097,11 +1407,11 @@ window.addEventListener('mousemove', (e) => {
     const total = editedDuration() || 1;
     const dx = e.clientX - drag.startX;
     if (Math.abs(dx) > 2) drag.moved = true;
-    // Within a clip, edited and source time advance 1:1, so a pixel delta maps
-    // to the same number of seconds in either space.
-    const dt = (dx / w) * total;
-    const b = drag.block;
     const c = drag.clip;
+    const sp = c.speed || 1;
+    // A pixel delta is edited seconds; blocks live in SOURCE time, so scale by speed.
+    const dt = (dx / w) * total * sp;
+    const b = drag.block;
     const minLen = 0.3;
     if (drag.mode === 'move') {
       const len = drag.origEnd - drag.origStart;
@@ -1114,23 +1424,44 @@ window.addEventListener('mousemove', (e) => {
       b.end = clamp(drag.origEnd + dt, b.start + minLen, c.end);
     }
     const ci = clips.indexOf(c);
-    const es = editedStartOf(ci) + (b.start - c.start);
-    const ee = editedStartOf(ci) + (b.end - c.start);
+    const es = editedStartOf(ci) + (b.start - c.start) / sp;
+    const ee = editedStartOf(ci) + (b.end - c.start) / sp;
     drag.el.style.left = `${(es / total) * w}px`;
     drag.el.style.width = `${Math.max(10, ((ee - es) / total) * w)}px`;
     drag.el.querySelector('span').textContent = `${b.scale.toFixed(1)}×`;
     drawAt(video.currentTime);
+    drawOverlays(playheadEdited);
     return;
   }
 
   if (clipDrag) {
     const dx = e.clientX - clipDrag.startX;
-    if (Math.abs(dx) > 3) clipDrag.moved = true;
-    clipDrag.el.style.transform = `translateX(${dx}px)`;
+    const dy = e.clientY - clipDrag.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) clipDrag.moved = true;
+    clipDrag.el.style.transform = `translate(${dx}px, ${dy}px)`;
     clipDrag.el.classList.add('dragging');
-    const rect = timeline.getBoundingClientRect();
-    clipDrag.slot = computeInsertIndex(e.clientX - rect.left);
-    showInsertMarker(clipDrag.slot);
+    const total = editedDuration() || 1;
+    const dtTime = (dx / (timeline.clientWidth || 1)) * total;
+    clipDrag.dropPos = clamp(clipDrag.origPos + dtTime, 0, total);
+    if (clipDrag.kind === 'audio') {
+      // Audio clips stay on audio tracks; pick the audio row under the pointer.
+      const arow = audioRowUnderPointer(e.clientY);
+      clipDrag.targetARow = arow;
+      highlightDropRowAudio(arow);
+      hideInsertMarker();
+      return;
+    }
+    const row = rowUnderPointer(e.clientY);
+    clipDrag.targetRow = row;
+    highlightDropRow(row);
+    // The insert marker (gapless slot) only applies when dropping on the main track.
+    if (row.type === 'main') {
+      const rect = timeline.getBoundingClientRect();
+      clipDrag.slot = computeInsertIndex(e.clientX - rect.left);
+      showInsertMarker(clipDrag.slot);
+    } else {
+      hideInsertMarker();
+    }
   }
 });
 
@@ -1147,8 +1478,29 @@ window.addEventListener('mouseup', () => {
     cd.el.style.transform = '';
     cd.el.classList.remove('dragging');
     hideInsertMarker();
-    if (cd.moved) moveClip(cd.idx, cd.slot);
-    else buildTimeline();
+    clearDropHighlight();
+    if (!cd.moved) { buildTimeline(); return; }
+    if (cd.kind === 'audio') {
+      const found = findAudioClip(cd.id);
+      const curTi = found ? audioTracks.indexOf(found.trk) : 0;
+      const ti = cd.targetARow ? cd.targetARow.ti : curTi;
+      moveAudioClip(cd.id, ti, cd.dropPos || 0);
+      return;
+    }
+    const row = cd.targetRow || { type: cd.kind === 'overlay' ? 'overlay' : 'main' };
+    if (cd.kind === 'main') {
+      if (row.type === 'overlay') mainClipToOverlay(cd.idx, row.ti, cd.dropPos || 0);
+      else moveClip(cd.idx, cd.slot);
+    } else {
+      if (row.type === 'main') {
+        overlayClipToMain(cd.id, cd.slot != null ? cd.slot : clips.length);
+      } else {
+        const found = findOverlayClip(cd.id);
+        const curTi = found ? overlayTracks.indexOf(found.trk) : -1;
+        if (row.ti === curTi) moveOverlayClipPos(cd.id, cd.dropPos || 0);
+        else overlayClipToTrack(cd.id, row.ti, cd.dropPos || 0);
+      }
+    }
   }
 });
 
@@ -1159,7 +1511,7 @@ function computeInsertIndex(x) {
   let acc = 0;
   let slot = 0;
   for (let i = 0; i < clips.length; i++) {
-    const len = clipLen(clips[i]);
+    const len = clipTLen(clips[i]);
     const mid = ((acc + len / 2) / total) * w;
     if (x > mid) slot = i + 1;
     acc += len;
@@ -1181,7 +1533,7 @@ function showInsertMarker(slot) {
   const w = timeline.clientWidth;
   const total = editedDuration() || 1;
   let acc = 0;
-  for (let i = 0; i < slot; i++) acc += clipLen(clips[i]);
+  for (let i = 0; i < slot; i++) acc += clipTLen(clips[i]);
   const el = ensureInsertEl();
   el.style.left = `${(acc / total) * w}px`;
   el.style.display = 'block';
@@ -1243,13 +1595,117 @@ function deleteBlock(b) {
 // ---------------------------------------------------------------------------
 // Clip model (non-linear edited timeline)
 // ---------------------------------------------------------------------------
-function clipLen(c) { return c.end - c.start; }
-function editedDuration() { return clips.reduce((a, c) => a + clipLen(c), 0); }
+function clipLen(c) { return c.end - c.start; }             // source-time length
+function editedDuration() { return clips.reduce((a, c) => a + clipTLen(c), 0); }
+
+// ---------------------------------------------------------------------------
+// Overlay helpers. `clipTLen` is a clip's length in EDITED (timeline) seconds,
+// which for speed≠1 differs from its source length. Overlay clips carry an
+// absolute `pos` (edited start); main clips are gapless so their edited start is
+// `editedStartOf`. `srcTimeOf` maps an edited time inside a clip to source time.
+// ---------------------------------------------------------------------------
+function clipTLen(c) { return (c.end - c.start) / (c.speed || 1); }
+function overlayEndPos(c) { return c.pos + clipTLen(c); }
+function srcTimeOf(c, te) { return c.start + (te - c.pos) * (c.speed || 1); }
+function allOverlayClips() { return overlayTracks.flatMap((t) => t.clips); }
+function overlayCoveringOnTrack(trk, te) {
+  return trk.clips.find((c) => te >= c.pos && te < overlayEndPos(c)) || null;
+}
+// Top-most overlay clip covering edited time `te` (search upper tracks first).
+function overlayClipAt(te) {
+  for (let t = overlayTracks.length - 1; t >= 0; t--) {
+    const c = overlayCoveringOnTrack(overlayTracks[t], te);
+    if (c) return { t, trk: overlayTracks[t], clip: c };
+  }
+  return null;
+}
+function findOverlayClip(id) {
+  for (const trk of overlayTracks) {
+    const c = trk.clips.find((x) => x.id === id);
+    if (c) return { trk, clip: c };
+  }
+  return null;
+}
+
+// --- Audio-track helpers (mirror the overlay helpers) ---
+function allAudioClips() { return audioTracks.flatMap((t) => t.clips); }
+function audioCoveringOnTrack(trk, te) {
+  return trk.clips.find((c) => te >= c.pos && te < overlayEndPos(c)) || null;
+}
+function findAudioClip(id) {
+  for (const trk of audioTracks) {
+    const c = trk.clips.find((x) => x.id === id);
+    if (c) return { trk, clip: c };
+  }
+  return null;
+}
+// Dedicated hidden <audio> per audio clip (created on first use).
+function audioElFor(c) {
+  let el = audioEls.get(c.id);
+  if (!el) {
+    const s = sourceById(c.sourceId);
+    if (!s || !s.url) return null;
+    el = new Audio();
+    el.src = s.url;
+    el.preload = 'auto';
+    audioEls.set(c.id, el);
+  }
+  return el;
+}
+function pruneAudioEls() {
+  const ids = new Set(allAudioClips().map((c) => c.id));
+  audioEls.forEach((el, id) => {
+    if (!ids.has(id)) { try { el.pause(); el.src = ''; } catch (_) {} audioEls.delete(id); }
+  });
+}
+function pauseAudioEls() { audioEls.forEach((el) => { if (!el.paused) el.pause(); }); }
+
+// Keep each audio clip's <audio> playing/seeked to match the playhead (preview
+// only — export rebuilds audio via ffmpeg, so this is skipped while capturing).
+function updateAudioTrackPlayback(te) {
+  if (capturing) return;
+  const active = new Set();
+  audioTracks.forEach((trk) => {
+    const c = audioCoveringOnTrack(trk, te);
+    if (!c) return;
+    const el = audioElFor(c);
+    if (!el) return;
+    active.add(el);
+    const want = srcTimeOf(c, te);
+    el.playbackRate = c.speed || 1;
+    el.volume = clamp(c.gain != null ? c.gain : 1, 0, 1);
+    if (playing) {
+      if (el.paused) { try { el.currentTime = want; } catch (_) {} el.play().catch(() => {}); }
+      else if (Math.abs(el.currentTime - want) > 0.3) { try { el.currentTime = want; } catch (_) {} }
+    } else {
+      if (!el.paused) el.pause();
+      if (Math.abs(el.currentTime - want) > 0.05) { try { el.currentTime = want; } catch (_) {} }
+    }
+  });
+  audioEls.forEach((el) => { if (!active.has(el) && !el.paused) el.pause(); });
+}
+
+// Resolve the duration of an audio URL (opus/webm can report Infinity first).
+function resolveAudioDuration(url) {
+  return new Promise((resolve) => {
+    const a = new Audio();
+    a.src = url;
+    const done = (d) => resolve(isFinite(d) && d > 0 ? d : 0);
+    a.addEventListener('loadedmetadata', () => {
+      if (isFinite(a.duration) && a.duration > 0) return done(a.duration);
+      const onDur = () => { if (isFinite(a.duration)) { a.removeEventListener('durationchange', onDur); done(a.duration); } };
+      a.addEventListener('durationchange', onDur);
+      a.currentTime = 1e6;
+      setTimeout(() => done(a.duration), 2000);
+    }, { once: true });
+    a.addEventListener('error', () => resolve(0), { once: true });
+  });
+}
 
 // Edited start (seconds) of the clip at index `idx`.
 function editedStartOf(idx) {
   let s = 0;
-  for (let i = 0; i < idx; i++) s += clipLen(clips[i]);
+  for (let i = 0; i < idx; i++) s += clipTLen(clips[i]);
   return s;
 }
 
@@ -1265,9 +1721,10 @@ function editedToSource(te) {
   te = clamp(te, 0, editedDuration());
   let acc = 0;
   for (let i = 0; i < clips.length; i++) {
-    const len = clipLen(clips[i]);
+    const len = clipTLen(clips[i]);
     if (te < acc + len || i === clips.length - 1) {
-      return { idx: i, clip: clips[i], src: clips[i].start + (te - acc) };
+      // Edited offset within the clip maps to source time scaled by speed.
+      return { idx: i, clip: clips[i], src: clips[i].start + (te - acc) * (clips[i].speed || 1) };
     }
     acc += len;
   }
@@ -1280,8 +1737,8 @@ function editedToSource(te) {
 function sourceToEdited(ts, sourceId) {
   let acc = 0;
   for (const c of clips) {
-    if ((sourceId == null || c.sourceId === sourceId) && ts >= c.start && ts < c.end) return acc + (ts - c.start);
-    acc += clipLen(c);
+    if ((sourceId == null || c.sourceId === sourceId) && ts >= c.start && ts < c.end) return acc + (ts - c.start) / (c.speed || 1);
+    acc += clipTLen(c);
   }
   return null;
 }
@@ -1301,10 +1758,24 @@ function selectClip(id) {
   buildTimeline();
 }
 
+// A full editable-timeline snapshot: the main track plus every overlay track.
+function snapshotState() {
+  return {
+    clips: clips.map((c) => ({ ...c })),
+    overlays: overlayTracks.map((t) => ({ id: t.id, clips: t.clips.map((c) => ({ ...c })) })),
+    audio: audioTracks.map((t) => ({ id: t.id, clips: t.clips.map((c) => ({ ...c })) })),
+  };
+}
+function applyState(s) {
+  clips = s.clips.map((c) => ({ ...c }));
+  overlayTracks = s.overlays.map((t) => ({ id: t.id, clips: t.clips.map((c) => ({ ...c })) }));
+  audioTracks = (s.audio || []).map((t) => ({ id: t.id, clips: t.clips.map((c) => ({ ...c })) }));
+}
+
 // Snapshot for undo, taken before every mutating edit. A fresh edit
 // invalidates the redo stack.
 function pushHistory() {
-  clipHistory.push(clips.map((c) => ({ ...c })));
+  clipHistory.push(snapshotState());
   if (clipHistory.length > 100) clipHistory.shift();
   clipFuture = [];
   updateUndoBtn();
@@ -1318,9 +1789,11 @@ function updateUndoBtn() {
 // Restore the snapshot popped from `from`, pushing the current state onto `to`.
 function restoreHistory(from, to) {
   if (exporting || !from.length) return;
-  to.push(clips.map((c) => ({ ...c })));
-  clips = from.pop();
+  to.push(snapshotState());
+  applyState(from.pop());
   if (!clips.some((c) => c.id === selectedClipId)) selectedClipId = null;
+  if (selectedOverlay && !findOverlayClip(selectedOverlay.clipId)) selectedOverlay = null;
+  if (selectedAudio && !findAudioClip(selectedAudio.clipId)) selectedAudio = null;
   updateUndoBtn();
   updateEmptyState();
   buildTimeline();
@@ -1340,7 +1813,7 @@ function splitAtPlayhead() {
   if (t <= c.start + 0.05 || t >= c.end - 0.05) return;
   pushHistory();
   const idx = clips.indexOf(c);
-  const right = { id: clipSeq++, sourceId: c.sourceId, start: t, end: c.end };
+  const right = { id: clipSeq++, sourceId: c.sourceId, start: t, end: c.end, speed: c.speed || 1 };
   c.end = t;
   clips.splice(idx + 1, 0, right);
   selectClip(right.id); // redraws the timeline
@@ -1374,6 +1847,296 @@ function moveClip(from, to) {
   seekEdited(clamp(playheadEdited, 0, editedDuration()));
 }
 
+// ---------------------------------------------------------------------------
+// Overlay track / clip operations
+// ---------------------------------------------------------------------------
+function addOverlayTrack() {
+  if (exporting) return;
+  pushHistory();
+  overlayTracks.push({ id: overlayTrackSeq++, clips: [] });
+  buildTimeline();
+}
+
+function deleteOverlayTrack(id) {
+  if (exporting) return;
+  const idx = overlayTracks.findIndex((t) => t.id === id);
+  if (idx < 0) return;
+  pushHistory();
+  overlayTracks.splice(idx, 1);
+  if (selectedOverlay && !findOverlayClip(selectedOverlay.clipId)) selectedOverlay = null;
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration())); // redraw without the removed layer
+}
+
+function deleteOverlayClip(id) {
+  if (exporting) return;
+  const found = findOverlayClip(id);
+  if (!found) return;
+  pushHistory();
+  found.trk.clips = found.trk.clips.filter((c) => c.id !== id);
+  if (selectedOverlay && selectedOverlay.clipId === id) selectedOverlay = null;
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
+function selectOverlayClip(id) {
+  const found = findOverlayClip(id);
+  selectedOverlay = found ? { clipId: id } : null;
+  if (found) { selectedClipId = null; selectedAudio = null; selectBlock(null); }
+}
+
+// Move a MAIN clip (by index) onto overlay track `ti` at edited position `pos`.
+function mainClipToOverlay(mainIdx, ti, pos) {
+  if (exporting || !clips[mainIdx] || !overlayTracks[ti]) return;
+  // The main track drives playback, so keep at least one clip on it.
+  if (clips.length <= 1) { topStatus.textContent = 'أبقِ مقطعًا واحدًا على الأقل في المسار الرئيسي'; buildTimeline(); return; }
+  pushHistory();
+  const [c] = clips.splice(mainIdx, 1);
+  const oc = { id: overlayClipSeq++, sourceId: c.sourceId, start: c.start, end: c.end, pos: Math.max(0, pos), speed: c.speed || 1 };
+  overlayTracks[ti].clips.push(oc);
+  if (selectedClipId === c.id) selectedClipId = null;
+  selectOverlayClip(oc.id);
+  updateEmptyState();
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
+// Move an overlay clip to another overlay track `ti` keeping its position.
+function overlayClipToTrack(id, ti, pos) {
+  const found = findOverlayClip(id);
+  if (exporting || !found || !overlayTracks[ti]) return;
+  if (overlayTracks[ti] === found.trk) { moveOverlayClipPos(id, pos); return; } // same track = reposition
+  pushHistory();
+  found.trk.clips = found.trk.clips.filter((c) => c.id !== id);
+  found.clip.pos = Math.max(0, pos);
+  overlayTracks[ti].clips.push(found.clip);
+  selectOverlayClip(id);
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
+// Move an overlay clip down into the main (gapless) track at insertion slot.
+function overlayClipToMain(id, slot) {
+  const found = findOverlayClip(id);
+  if (exporting || !found) return;
+  pushHistory();
+  found.trk.clips = found.trk.clips.filter((c) => c.id !== id);
+  const c = found.clip;
+  const mc = { id: clipSeq++, sourceId: c.sourceId, start: c.start, end: c.end, speed: c.speed || 1 };
+  slot = clamp(slot, 0, clips.length);
+  clips.splice(slot, 0, mc);
+  selectedOverlay = null;
+  selectClip(mc.id);
+  updateEmptyState();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
+// Just reposition an overlay clip within its own track.
+function moveOverlayClipPos(id, pos) {
+  const found = findOverlayClip(id);
+  if (exporting || !found) return;
+  pushHistory();
+  found.clip.pos = Math.max(0, pos);
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
+// ---------------------------------------------------------------------------
+// Audio-track operations
+// ---------------------------------------------------------------------------
+function addAudioTrack() {
+  if (exporting) return;
+  pushHistory();
+  audioTracks.push({ id: audioTrackSeq++, clips: [] });
+  buildTimeline();
+}
+function deleteAudioTrack(id) {
+  if (exporting) return;
+  const idx = audioTracks.findIndex((t) => t.id === id);
+  if (idx < 0) return;
+  pushHistory();
+  audioTracks.splice(idx, 1);
+  if (selectedAudio && !findAudioClip(selectedAudio.clipId)) selectedAudio = null;
+  buildTimeline();
+}
+function deleteAudioClip(id) {
+  if (exporting) return;
+  const found = findAudioClip(id);
+  if (!found) return;
+  pushHistory();
+  found.trk.clips = found.trk.clips.filter((c) => c.id !== id);
+  if (selectedAudio && selectedAudio.clipId === id) selectedAudio = null;
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+function selectAudioClip(id) {
+  const found = findAudioClip(id);
+  selectedAudio = found ? { clipId: id } : null;
+  if (found) { selectedClipId = null; selectedOverlay = null; selectBlock(null); }
+}
+// Move an audio clip to audio track index `ti` at edited position `pos`.
+function moveAudioClip(id, ti, pos) {
+  const found = findAudioClip(id);
+  if (exporting || !found || !audioTracks[ti]) return;
+  pushHistory();
+  if (audioTracks[ti] !== found.trk) {
+    found.trk.clips = found.trk.clips.filter((c) => c.id !== id);
+    audioTracks[ti].clips.push(found.clip);
+  }
+  found.clip.pos = Math.max(0, pos);
+  selectAudioClip(id);
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
+// ---------------------------------------------------------------------------
+// Voice-over: record the mic while the timeline plays, then drop the clip onto
+// an audio track at the position where recording started.
+// ---------------------------------------------------------------------------
+async function toggleVoiceOver() {
+  if (exporting) return;
+  if (voState) { stopVoiceOver(); return; }
+  if (voArming) return; // ignore repeat clicks while the mic stream is resolving
+  voArming = true;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+      video: false,
+    });
+  } catch (err) {
+    voArming = false;
+    topStatus.textContent = 'تعذّر الوصول إلى الميكروفون: ' + (err.message || err);
+    return;
+  }
+  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+  const recorder = new MediaRecorder(stream, { mimeType: mime });
+  const chunks = [];
+  recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => finishVoiceOver(chunks, stream);
+  voState = { recorder, chunks, startPos: playheadEdited, stream, startTime: Date.now() };
+  voArming = false;
+  voBtn.classList.add('recording');
+  voBtn.textContent = '⏹ إيقاف';
+  topStatus.textContent = '● جارٍ تسجيل التعليق…';
+  recorder.start();
+  if (!playing) play(); // roll the timeline so the user can narrate over it
+}
+
+function stopVoiceOver() {
+  if (!voState) return;
+  if (voState.recorder.state !== 'inactive') voState.recorder.stop();
+  if (playing) pause();
+}
+
+// Import audio files (voice notes / music) as clips on an audio track, placed
+// from the playhead and stacked back-to-back.
+async function importAudioFiles() {
+  if (exporting) return;
+  topStatus.textContent = 'جارٍ الاستيراد…';
+  let list = [];
+  try {
+    list = await window.api.importAudio();
+  } catch (err) {
+    topStatus.textContent = 'تعذّر الاستيراد: ' + (err.message || err);
+    return;
+  }
+  if (!list.length) { topStatus.textContent = ''; return; }
+
+  // Resolve durations first so we don't push a history entry for nothing.
+  const resolved = [];
+  for (const item of list) {
+    const dur = await resolveAudioDuration(item.url);
+    if (dur) resolved.push({ item, dur });
+  }
+  if (!resolved.length) { topStatus.textContent = 'تعذّر قراءة الملف الصوتي'; return; }
+
+  pushHistory();
+  if (!audioTracks.length) audioTracks.push({ id: audioTrackSeq++, clips: [] });
+  const trk = audioTracks[audioTracks.length - 1];
+  let pos = playheadEdited;
+  let lastId = null;
+  for (const { item, dur } of resolved) {
+    sources.push({ id: item.id, kind: 'import', url: item.url, el: null, duration: dur, width: 0, height: 0, hasAudio: true, name: item.name });
+    const clip = { id: audioClipSeq++, sourceId: item.id, start: 0, end: dur, pos: Math.max(0, pos), speed: 1, gain: 1, voice: false };
+    trk.clips.push(clip);
+    pos += dur;
+    lastId = clip.id;
+  }
+  selectAudioClip(lastId);
+  topStatus.textContent = `أُضيف ${resolved.length} مقطع صوتي`;
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
+async function finishVoiceOver(chunks, stream) {
+  try { stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+  const startPos = voState ? voState.startPos : 0;
+  const startTime = voState ? voState.startTime : 0;
+  voState = null;
+  voBtn.classList.remove('recording');
+  voBtn.textContent = '🎙 تعليق';
+  const blob = new Blob(chunks, { type: 'audio/webm' });
+  if (!blob.size) { topStatus.textContent = 'لم يُسجَّل صوت'; return; }
+  topStatus.textContent = 'جارٍ حفظ التعليق…';
+  let res;
+  try {
+    res = await window.api.saveVoiceOver(await blob.arrayBuffer());
+  } catch (err) {
+    topStatus.textContent = 'تعذّر حفظ التعليق: ' + (err.message || err);
+    return;
+  }
+  if (!res || !res.id) { topStatus.textContent = 'تعذّر حفظ التعليق'; return; }
+  // MediaRecorder webm/opus often reports Infinity duration; fall back to the
+  // measured wall-clock recording length so a valid take is never dropped.
+  let dur = await resolveAudioDuration(res.url);
+  if ((!dur || !isFinite(dur)) && startTime) dur = (Date.now() - startTime) / 1000;
+  if (!dur) { topStatus.textContent = 'التعليق فارغ'; return; }
+  sources.push({ id: res.id, kind: 'voiceover', url: res.url, el: null, duration: dur, width: 0, height: 0, hasAudio: true, name: 'تعليق صوتي' });
+  pushHistory();
+  if (!audioTracks.length) audioTracks.push({ id: audioTrackSeq++, clips: [] });
+  const clip = { id: audioClipSeq++, sourceId: res.id, start: 0, end: dur, pos: Math.max(0, startPos), speed: 1, gain: 1, voice: true };
+  audioTracks[audioTracks.length - 1].clips.push(clip);
+  selectAudioClip(clip.id);
+  topStatus.textContent = 'أُضيف التعليق الصوتي';
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
+// ---------------------------------------------------------------------------
+// Per-clip speed (main or overlay). The selected clip's `speed` scales its
+// timeline length (shorter as it speeds up) and its playback rate.
+// ---------------------------------------------------------------------------
+function currentSpeedClip() {
+  if (selectedAudio) { const f = findAudioClip(selectedAudio.clipId); return f ? f.clip : null; }
+  if (selectedOverlay) { const f = findOverlayClip(selectedOverlay.clipId); return f ? f.clip : null; }
+  return selectedClip();
+}
+
+function updateSpeedControl() {
+  const c = currentSpeedClip();
+  if (!c) { speedGroup.style.display = 'none'; return; }
+  speedGroup.style.display = '';
+  const sp = c.speed || 1;
+  speedRange.value = String(sp);
+  speedVal.textContent = `${sp.toFixed(2)}×`;
+}
+
+function setSpeed(v) {
+  const c = currentSpeedClip();
+  if (!c || exporting) return;
+  const sp = clamp(parseFloat(v) || 1, 0.25, 4);
+  if (Math.abs(sp - (c.speed || 1)) < 1e-4) return;
+  pushHistory();
+  c.speed = sp;
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+  updateSpeedControl();
+}
+// Live label while dragging; commit (one history entry) on release.
+speedRange.addEventListener('input', () => { speedVal.textContent = `${parseFloat(speedRange.value).toFixed(2)}×`; });
+speedRange.addEventListener('change', () => setSpeed(speedRange.value));
+
 const importBtn = document.getElementById('importBtn');
 importBtn.addEventListener('click', importVideos);
 autoZoomBtn.addEventListener('click', autoZoom);
@@ -1382,6 +2145,9 @@ clearZoomBtn.addEventListener('click', clearZoom);
 splitBtn.addEventListener('click', splitAtPlayhead);
 undoBtn.addEventListener('click', undo);
 redoBtn.addEventListener('click', redo);
+addTrackBtn.addEventListener('click', addOverlayTrack);
+voBtn.addEventListener('click', toggleVoiceOver);
+importAudioBtn.addEventListener('click', importAudioFiles);
 
 // Reflect the selected clip's intro transition in the picker.
 function updateTransitionControl() {
@@ -1466,6 +2232,12 @@ window.addEventListener('keydown', (e) => {
     if (selectedBlock) {
       e.preventDefault();
       deleteBlock(selectedBlock);
+    } else if (selectedAudio) {
+      e.preventDefault();
+      deleteAudioClip(selectedAudio.clipId);
+    } else if (selectedOverlay) {
+      e.preventDefault();
+      deleteOverlayClip(selectedOverlay.clipId);
     } else if (selectedClipId != null) {
       e.preventDefault();
       deleteClip(selectedClipId);
@@ -1656,12 +2428,20 @@ async function runExport() {
     ? clickTimes.map((t) => sourceToEdited(t, recording.id)).filter((t) => t != null)
     : [];
 
+  // Overlay video clips and audio-track clips both contribute audio, mixed in at
+  // their timeline `pos`. Voice-over clips carry `voice` so ffmpeg can denoise them.
+  const overlayPayload = [...allOverlayClips(), ...allAudioClips()].map((c) => ({
+    sourceId: c.sourceId, start: c.start, end: c.end, pos: c.pos, speed: c.speed || 1,
+    gain: c.gain != null ? c.gain : 1, voice: !!c.voice,
+  }));
+
   // Pass the clip list (with source ids) whenever the timeline isn't a single,
   // untrimmed recording clip — that lone case keeps the original fast path.
-  const pureUnedited = recording && !isEdited() && clips.length === 1 && clips[0].sourceId === recording.id;
+  const pureUnedited = recording && !isEdited() && clips.length === 1
+    && clips[0].sourceId === recording.id && (clips[0].speed || 1) === 1 && !overlayPayload.length;
   const clipsPayload = pureUnedited
     ? null
-    : clips.map((c) => ({ sourceId: c.sourceId, start: c.start, end: c.end }));
+    : clips.map((c) => ({ sourceId: c.sourceId, start: c.start, end: c.end, speed: c.speed || 1 }));
 
   try {
     const res = await window.api.runExport({
@@ -1674,6 +2454,7 @@ async function runExport() {
         clickVolume: parseInt(clickVol.value, 10) / 100,
         durationSec: editedDuration(),
         clips: clipsPayload,
+        overlayClips: overlayPayload,
         format: exportFormat.value,
         quality: exportQuality.value,
         resolution: exportResolution.value,
@@ -1703,6 +2484,7 @@ async function runExport() {
 
 function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
   transSnapIdx = -1; // start the capture with no pending transition snapshot
+  capturing = true;  // overlay elements play muted alongside during capture
   return new Promise((resolve, reject) => {
     // captureStream(0) = manual mode: we push exactly one frame per drawn frame
     // via requestFrame(), so no empty/duplicated frames sneak into the encoder.
@@ -1716,10 +2498,12 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
     let finished = false;
     rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
     rec.onstop = async () => {
+      capturing = false;
+      pauseOverlayEls();
       updateAudioRouting(); // restore preview audio routing
       resolve(await new Blob(parts, { type: 'video/webm' }).arrayBuffer());
     };
-    rec.onerror = (e) => { updateAudioRouting(); reject(e.error || new Error('خطأ في المُسجِّل')); };
+    rec.onerror = (e) => { capturing = false; pauseOverlayEls(); updateAudioRouting(); reject(e.error || new Error('خطأ في المُسجِّل')); };
 
     const pushFrame = () => { if (track.requestFrame) track.requestFrame(); };
 
@@ -1740,11 +2524,13 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
       if (finished) return;
       if (skipping) return; // waiting on a 'seeked'; onSeeked re-arms the loop
       drawClipIdx = segIdx;
+      const segSp = seq[segIdx].speed || 1;
+      if (video.playbackRate !== segSp) video.playbackRate = segSp; // per-clip speed
 
-      // Reached the end of the current clip.
-      if (video.ended || video.currentTime >= seq[segIdx].end - 0.02) {
+      // Reached the end of the current clip (source-second lead scaled by speed).
+      if (video.ended || video.currentTime >= seq[segIdx].end - 0.02 * segSp) {
         snapshotOutgoing(segIdx + 1); // freeze for the next clip's transition
-        elapsedBefore += seq[segIdx].end - seq[segIdx].start;
+        elapsedBefore += clipTLen(seq[segIdx]); // timeline length (speed-scaled)
         const prevSourceId = seq[segIdx].sourceId;
         segIdx++;
         if (segIdx >= seq.length) {
@@ -1806,19 +2592,19 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
 
       // Keep the webcam advancing during recording clips, idle during imports.
       if (camReady) {
-        if (activeIsRecording()) { if (camVideo.paused) camVideo.play().catch(() => {}); }
+        if (activeIsRecording()) { camVideo.playbackRate = segSp; if (camVideo.paused) camVideo.play().catch(() => {}); }
         else if (!camVideo.paused) camVideo.pause();
       }
 
       // Throttle to ~60fps so a 144Hz display doesn't produce a 144fps file.
       if (lastFrame < 0 || now - lastFrame >= FRAME_MS - 1) {
         lastFrame = now;
+        const teNow = elapsedBefore + (video.currentTime - seq[segIdx].start) / segSp;
         drawAt(video.currentTime);
+        updateOverlayPlayback(teNow); // drive overlay elements (muted) alongside
+        drawOverlays(teNow);          // composite the top overlay layer
         pushFrame();
-        if (onProgress && total) {
-          const done = elapsedBefore + (video.currentTime - seq[segIdx].start);
-          onProgress(Math.min(1, done / total));
-        }
+        if (onProgress && total) onProgress(Math.min(1, teNow / total));
       }
       requestAnimationFrame(step);
     };
@@ -1829,6 +2615,8 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
       transSnapIdx = -1; // no transition on the very first clip
       drawClipIdx = 0;
       drawAt(video.currentTime);
+      updateOverlayPlayback(0);
+      drawOverlays(0);
       rec.start();
       pushFrame();
       video.play();

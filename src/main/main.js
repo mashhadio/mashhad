@@ -88,12 +88,19 @@ let currentProject = null; // { videoPath, cursorPath, hasAudio, display, recBas
 // export resolves each clip's audio back to a file here. The recording (when the
 // editor was opened from one) is registered as id 'rec'; imported videos get
 // ids like 'imp_1'. Reset whenever a fresh editor session is opened.
-let mediaSources = {}; // id -> { path, hasAudio, kind: 'recording' | 'import' }
+let mediaSources = {}; // id -> { path, hasAudio, kind: 'recording' | 'import' | 'voiceover' }
 let importSeq = 1;
+let voiceOverSeq = 1;
 
 function resetMediaSources() {
+  // Remove any voice-over temp files from the previous session before clearing.
+  for (const id of Object.keys(mediaSources)) {
+    const s = mediaSources[id];
+    if (s && s.kind === 'voiceover') { try { fs.unlinkSync(s.path); } catch (_) {} }
+  }
   mediaSources = {};
   importSeq = 1;
+  voiceOverSeq = 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -488,6 +495,42 @@ ipcMain.handle('source:import', async () => {
   return out;
 });
 
+// Import audio files (voice notes / music) as timeline audio sources.
+ipcMain.handle('source:importAudio', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: 'إضافة ملف صوتي',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'ملفات الصوت', extensions: ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'opus', 'flac', 'webm'] },
+      { name: 'كل الملفات', extensions: ['*'] },
+    ],
+  });
+  if (canceled || !filePaths.length) return [];
+
+  const out = [];
+  for (const p of filePaths) {
+    if (!fs.existsSync(p)) continue;
+    let hasAudio = true;
+    try { hasAudio = await probeHasAudio(p); } catch (_) {}
+    if (!hasAudio) continue; // no audio stream — nothing to add
+    const id = `imp_${importSeq++}`;
+    mediaSources[id] = { path: p, hasAudio: true, kind: 'import' };
+    out.push({ id, url: pathToFileUrl(p), name: path.basename(p), hasAudio: true });
+  }
+  return out;
+});
+
+// Save a recorded voice-over blob to a temp file and register it as an audio
+// source so the export can resolve its path (like an imported clip).
+ipcMain.handle('voiceover:save', async (_evt, buffer) => {
+  if (!buffer) return null;
+  const id = `vo_${voiceOverSeq++}`;
+  const p = path.join(os.tmpdir(), `ssr-vo-${Date.now()}-${id}.webm`);
+  fs.writeFileSync(p, Buffer.from(buffer));
+  mediaSources[id] = { path: p, hasAudio: true, kind: 'voiceover' };
+  return { id, url: pathToFileUrl(p), path: p };
+});
+
 // List previously saved recordings (newest first).
 ipcMain.handle('recordings:list', async () => {
   ensureDir(RECORDINGS_DIR);
@@ -604,6 +647,7 @@ ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
   // Resolve each clip's audio back to a registered source file. Clips that
   // reference an unknown/missing source are treated as silent.
   const clips = Array.isArray(options.clips) ? options.clips : null;
+  const overlayClips = Array.isArray(options.overlayClips) ? options.overlayClips : [];
   const sourceInfo = {};
   for (const id of Object.keys(mediaSources)) {
     const s = mediaSources[id];
@@ -614,6 +658,7 @@ ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
     await exportVideo({
       zoomedVideoPath: tmpZoomed,
       clips,
+      overlayClips,
       sources: sourceInfo,
       recordingSourceId: mediaSources.rec ? 'rec' : null,
       noiseProfile: options.noiseProfile,

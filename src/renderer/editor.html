@@ -28,14 +28,20 @@
       <div class="transport">
         <button id="playBtn">▶ تشغيل</button>
         <span class="time-label" id="timeLabel">00:00 / 00:00</span>
-        <div class="timeline" id="timeline">
+        <div class="timeline-stack" id="timelineStack">
+          <div class="tl-overlays" id="tlOverlays"></div>
+          <div class="timeline" id="timeline"></div>
+          <div class="tl-audio" id="tlAudio"></div>
           <div class="playhead" id="playhead"></div>
+        </div>
+        <div class="tl-actions">
+          <button class="btn-ghost tl-addtrack" id="addTrackBtn" title="أضف طبقة فيديو فوق المسار الرئيسي">＋ طبقة</button>
+          <button class="btn-ghost tl-addtrack" id="voBtn" title="سجّل تعليقًا صوتيًا فوق الخط الزمني">🎙 تعليق</button>
         </div>
       </div>
 
       <p class="hint compact" id="zoomHint">
-        <b>S</b> لتقسيم المقطع · اسحب المقاطع لإعادة ترتيبها · <b>Delete</b> لحذف المحدّد · <b>Ctrl+Z</b> للتراجع · <b>Ctrl+Y</b> للإعادة.
-        اسحب كتل التكبير لتحريكها وحوافها لتغيير حجمها.
+        <b>S</b> لتقسيم المقطع · اسحب المقاطع لإعادة ترتيبها · اسحب مقطعًا لأعلى لطبقة فوقية (يظهر الأعلى) · <b>Delete</b> لحذف المحدّد · <b>Ctrl+Z</b>/<b>Ctrl+Y</b> تراجع/إعادة.
       </p>
         </div>
 
@@ -45,6 +51,7 @@
         <button class="panel-title" type="button"><span class="panel-ic">🎬</span><span class="panel-name">المقاطع</span><span class="panel-chev">▾</span></button>
         <div class="group">
           <button class="btn-primary" id="importBtn" title="أضف ملفات فيديو إلى الخط الزمني">＋ إضافة فيديو</button>
+          <button id="importAudioBtn" title="استورد ملفًا صوتيًا (ملاحظة صوتية) إلى مسار صوت">＋ صوت</button>
           <button id="splitBtn" title="قسّم المقطع عند المؤشر (S)">✂ تقسيم</button>
           <button id="undoBtn" disabled title="تراجع عن آخر تعديل (Ctrl+Z)">↩ تراجع</button>
           <button id="redoBtn" disabled title="إعادة آخر تعديل (Ctrl+Y)">↪ إعادة</button>
@@ -61,6 +68,13 @@
               <option value="wipe">مسح</option>
               <option value="zoom">تكبير</option>
             </select>
+          </div>
+        </div>
+        <div class="sep"></div>
+        <div class="group" id="speedGroup" style="display:none">
+          <div class="slider">
+            <span>السرعة: <b id="speedVal">1.0×</b></span>
+            <input type="range" id="speedRange" min="0.25" max="4" step="0.05" value="1" title="سرعة المقطع المحدد" />
           </div>
         </div>
       </div>
