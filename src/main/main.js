@@ -784,6 +784,7 @@ ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
       zoomedVideoPath: tmpZoomed,
       clips,
       overlayClips,
+      recordingAudioMuted: !!options.recordingAudioMuted,
       sources: sourceInfo,
       recordingSourceId: mediaSources.rec ? 'rec' : null,
       noiseProfile: options.noiseProfile,

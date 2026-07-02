@@ -17,6 +17,10 @@ const timeline = document.getElementById('timeline');
 const playhead = document.getElementById('playhead');
 const tlOverlays = document.getElementById('tlOverlays');
 const tlAudio = document.getElementById('tlAudio');
+const tlRuler = document.getElementById('tlRuler');
+const timelineScroll = document.getElementById('timelineScroll');
+const tlZoomRange = document.getElementById('tlZoomRange');
+const linkAudio = document.getElementById('linkAudio');
 const addTrackBtn = document.getElementById('addTrackBtn');
 const voBtn = document.getElementById('voBtn');
 const importAudioBtn = document.getElementById('importAudioBtn');
@@ -290,6 +294,8 @@ async function init() {
   updateTimeLabel();
   updateEmptyState();
   updateSceneControl();
+  linkAudio.disabled = !(recording && recording.hasAudio);
+  linkAudio.closest('.tl-link').style.display = linkAudio.disabled ? 'none' : '';
 
   // Prepare the cleaned-audio preview in the background for the current profile.
   if (recHasAudio && noiseProfile.value !== 'off') applyAudioPreview(noiseProfile.value);
@@ -932,11 +938,15 @@ function drawCam() {
 
 // When cleaned audio is active we mute the raw video track and play the cleaned
 // track instead; otherwise the video plays its own (raw) audio.
+// True when the recording's mic audio has been detached onto its own audio track
+// (so video cuts don't affect it). Derived from the presence of a detached clip.
+function isAudioDetached() { return allAudioClips().some((c) => c.detached); }
+
 function updateAudioRouting() {
   if (!video) return;
-  // Recording: route through the cleaned-audio track when active (mute the raw
-  // video). Imports always play their own audio.
-  video.muted = activeIsRecording() ? cleanAudioActive : false;
+  // Recording: route through the cleaned-audio track when active, or stay muted
+  // when the audio is detached (the audio track plays it). Imports play their own.
+  video.muted = activeIsRecording() ? (cleanAudioActive || isAudioDetached()) : false;
 }
 
 // Render (via ffmpeg) and load the cleaned mic audio for the given profile, then
@@ -976,7 +986,7 @@ async function applyAudioPreview(profile) {
   cleanAudioActive = true;
   cleanAudio.currentTime = video.currentTime;
   updateAudioRouting();
-  if (!video.paused) cleanAudio.play().catch(() => {});
+  if (!video.paused && !isAudioDetached()) cleanAudio.play().catch(() => {});
   audioStatus.textContent = '· مُنقّى ✓';
 }
 
@@ -1083,9 +1093,13 @@ function renderLoop() {
     if (cleanAudioActive) cleanAudio.playbackRate = sp;
     playClickSounds(video.currentTime);
     if (camReady && camVideo.paused) camVideo.play().catch(() => {});
-    if (cleanAudioActive) {
+    // When audio is detached, the detached clip plays the mic (via its own
+    // <audio>), so keep the cleaned track silent to avoid doubled audio.
+    if (cleanAudioActive && !isAudioDetached()) {
       if (cleanAudio.paused) cleanAudio.play().catch(() => {});
       if (Math.abs(cleanAudio.currentTime - video.currentTime) > 0.18) cleanAudio.currentTime = video.currentTime;
+    } else if (!cleanAudio.paused) {
+      cleanAudio.pause();
     }
   } else {
     lastFxTime = video.currentTime; // no recorded clicks belong to imports
@@ -1121,7 +1135,7 @@ function play() {
   video.play().catch(() => {});
   const isRec = activeIsRecording();
   if (isRec && camReady) camVideo.play().catch(() => {});
-  if (isRec && cleanAudioActive) { cleanAudio.currentTime = video.currentTime; cleanAudio.play().catch(() => {}); }
+  if (isRec && cleanAudioActive && !isAudioDetached()) { cleanAudio.currentTime = video.currentTime; cleanAudio.play().catch(() => {}); }
   playBtn.textContent = '⏸ إيقاف مؤقت';
   renderLoop();
 }
@@ -1151,9 +1165,59 @@ function updateTimeLabel() {
 // ---------------------------------------------------------------------------
 // Timeline rendering (edited time: positions come from cumulative clip lengths)
 // ---------------------------------------------------------------------------
+// Timeline zoom: the stack is widened to `viewport × zoomFactor`, so all the
+// existing `(t/total)*timeline.clientWidth` math keeps working — clientWidth just
+// becomes the zoomed content width — and the viewport scrolls horizontally.
+let zoomFactor = 1;
+function tlContentWidth() { return Math.max(1, (timelineScroll.clientWidth || 1) * zoomFactor); }
+function sizeTimeline() { timelineStack.style.width = tlContentWidth() + 'px'; }
+
+// Draw a seconds ruler with "nice" intervals (~every 70px) at the current zoom.
+let rulerKey = '';
+function buildRuler() {
+  const total = editedDuration();
+  const w = timeline.clientWidth;
+  // Skip regeneration when neither width nor duration changed (buildTimeline runs
+  // on every edit/drag; the ruler only depends on w + total).
+  const key = `${Math.round(w)}_${Math.round(total * 100)}`;
+  if (key === rulerKey && tlRuler.childElementCount) return;
+  rulerKey = key;
+  tlRuler.innerHTML = '';
+  if (!total) return;
+  const pps = w / (total || 1);
+  const NICE = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+  let step = NICE.find((s) => s * pps >= 70) || NICE[NICE.length - 1];
+  for (let t = 0; t <= total + 1e-6; t += step) {
+    const x = (t / total) * w;
+    const tick = document.createElement('div');
+    tick.className = 'tick';
+    tick.style.left = x + 'px';
+    tlRuler.appendChild(tick);
+    const lbl = document.createElement('span');
+    lbl.className = 'tick-label';
+    lbl.style.left = x + 'px';
+    lbl.textContent = fmt(t);
+    tlRuler.appendChild(lbl);
+  }
+}
+
+function applyZoom() {
+  sizeTimeline();
+  if (zoomFactor <= 1) timelineScroll.scrollLeft = 0; // fit view: nothing to scroll to
+  buildTimeline();
+  movePlayhead(playheadEdited);
+}
+// Coalesce rapid zoom/resize events into one rebuild per frame.
+let zoomRaf = 0;
+function scheduleZoom() {
+  if (zoomRaf) return;
+  zoomRaf = requestAnimationFrame(() => { zoomRaf = 0; applyZoom(); });
+}
+
 function buildTimeline() {
   [...timeline.querySelectorAll('.block, .click-tick, .clip')].forEach((n) => n.remove());
   transSnapIdx = -1; // any pending transition snapshot is stale after a rebuild
+  sizeTimeline();
   const w = timeline.clientWidth;
   const total = editedDuration() || 1;
 
@@ -1227,8 +1291,10 @@ function buildTimeline() {
 
   buildOverlayRows();
   buildAudioRows();
+  buildRuler();
   updateTransitionControl();
   updateSpeedControl();
+  linkAudio.checked = !isAudioDetached(); // reflect detach state (covers undo/redo)
 }
 
 // Render one row per audio track (voice-over / audio clips), below the main track.
@@ -1252,7 +1318,7 @@ function buildAudioRows() {
       el.style.left = `${(c.pos / total) * w}px`;
       el.style.width = `${Math.max(6, (clipTLen(c) / total) * w)}px`;
       el.title = (src ? src.name + ' · ' : '') + 'اسحب للتحريك · ✕ للحذف';
-      const icon = c.voice ? '🎙 ' : '';
+      const icon = c.detached ? '🔗 ' : c.voice ? '🎙 ' : '';
       el.innerHTML = `<span class="clip-label">${icon}${fmt(clipTLen(c))}</span><button class="clip-delete" title="حذف" tabindex="-1">✕</button>`;
       el.querySelector('.clip-delete').addEventListener('mousedown', (e) => e.stopPropagation());
       el.querySelector('.clip-delete').addEventListener('click', (e) => { e.stopPropagation(); deleteAudioClip(c.id); });
@@ -1297,7 +1363,15 @@ function buildOverlayRows() {
 }
 
 function movePlayhead(te) {
-  playhead.style.left = `${(te / (editedDuration() || 1)) * timeline.clientWidth}px`;
+  const x = (te / (editedDuration() || 1)) * timeline.clientWidth;
+  playhead.style.left = `${x}px`;
+  // Keep the playhead in view while zoomed in (auto-scroll during playback/seek).
+  if (zoomFactor > 1) {
+    const vw = timelineScroll.clientWidth;
+    const sl = timelineScroll.scrollLeft;
+    if (x < sl + 40) timelineScroll.scrollLeft = Math.max(0, x - 40);
+    else if (x > sl + vw - 40) timelineScroll.scrollLeft = x - vw + 40;
+  }
 }
 
 // Redraw once the element's async seek lands, so scrubbing across sources shows
@@ -2093,6 +2167,32 @@ function moveAudioClip(id, ti, pos) {
   seekEdited(clamp(playheadEdited, 0, editedDuration()));
 }
 
+// Detach the recording's mic audio onto its own audio track so video edits no
+// longer cut it (the "unlink audio" state). The video's own audio is muted.
+function detachAudio() {
+  if (exporting || !recording || !recording.hasAudio || isAudioDetached()) return;
+  const rec = sourceById(recording.id);
+  const dur = rec ? rec.duration : 0;
+  if (!dur) return;
+  pushHistory();
+  // Use a dedicated track so the full-length detached clip never overlaps an
+  // existing voice-over / imported audio clip.
+  const trk = { id: audioTrackSeq++, clips: [] };
+  trk.clips.push({ id: audioClipSeq++, sourceId: recording.id, start: 0, end: dur, pos: 0, speed: 1, gain: 1, voice: true, detached: true });
+  audioTracks.push(trk);
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
+// Re-link: remove the detached audio clip(s); the video's own audio is used again.
+function reattachAudio() {
+  if (exporting || !isAudioDetached()) return;
+  pushHistory();
+  audioTracks.forEach((t) => { t.clips = t.clips.filter((c) => !c.detached); });
+  buildTimeline();
+  seekEdited(clamp(playheadEdited, 0, editedDuration()));
+}
+
 // ---------------------------------------------------------------------------
 // Voice-over: record the mic while the timeline plays, then drop the clip onto
 // an audio track at the position where recording started.
@@ -2318,6 +2418,8 @@ const SILENCE_RATIOS = { 1: 0.02, 2: 0.04, 3: 0.06, 4: 0.10, 5: 0.15 };
 
 async function removeSilences() {
   if (exporting || !recording || !recording.hasAudio) return;
+  // With audio detached, cutting only the video would desync the audio clip.
+  if (isAudioDetached()) { silenceStatus.textContent = 'أعد ربط الصوت أولًا (🔗)'; return; }
   removeSilenceBtn.disabled = true;
   silenceStatus.textContent = 'جارٍ التحليل…';
   let buf;
@@ -2382,6 +2484,35 @@ redoBtn.addEventListener('click', redo);
 addTrackBtn.addEventListener('click', addOverlayTrack);
 voBtn.addEventListener('click', toggleVoiceOver);
 importAudioBtn.addEventListener('click', importAudioFiles);
+
+// Timeline zoom: slider + Ctrl/Cmd+wheel (zoom toward the cursor).
+tlZoomRange.addEventListener('input', () => { zoomFactor = parseFloat(tlZoomRange.value) || 1; scheduleZoom(); });
+timelineScroll.addEventListener('wheel', (e) => {
+  if (!e.ctrlKey && !e.metaKey) return; // let normal (non-modifier) wheel scroll
+  e.preventDefault();
+  const total = editedDuration() || 1;
+  const rect = timeline.getBoundingClientRect();
+  const tAtCursor = ((e.clientX - rect.left) / (timeline.clientWidth || 1)) * total;
+  const old = zoomFactor;
+  zoomFactor = clamp(zoomFactor * (e.deltaY < 0 ? 1.15 : 1 / 1.15), 1, 20);
+  if (zoomFactor === old) return;
+  tlZoomRange.value = String(zoomFactor);
+  sizeTimeline();
+  buildTimeline();
+  const newX = (tAtCursor / total) * timeline.clientWidth;
+  const viewportX = e.clientX - timelineScroll.getBoundingClientRect().left;
+  timelineScroll.scrollLeft = Math.max(0, newX - viewportX);
+  movePlayhead(playheadEdited);
+}, { passive: false });
+
+// Reflow the timeline (and fit-width) when the window resizes (throttled).
+window.addEventListener('resize', () => { if (clips.length || allOverlayClips().length || allAudioClips().length) scheduleZoom(); });
+
+// Link/unlink the recording's audio from its video (detach onto an audio track).
+linkAudio.addEventListener('change', () => {
+  if (!recording || !recording.hasAudio) { linkAudio.checked = true; return; }
+  if (linkAudio.checked) reattachAudio(); else detachAudio();
+});
 
 const SILENCE_SENS_LABELS = { 1: 'منخفضة جدًا', 2: 'منخفضة', 3: 'متوسطة', 4: 'عالية', 5: 'عالية جدًا' };
 silenceSens.addEventListener('input', () => {
@@ -2702,6 +2833,9 @@ async function runExport() {
         durationSec: editedDuration(),
         clips: clipsPayload,
         overlayClips: overlayPayload,
+        // When detached, the mic audio comes from the audio-track clip above, so
+        // the recording video clips must not also contribute it.
+        recordingAudioMuted: isAudioDetached(),
         format: exportFormat.value,
         quality: exportQuality.value,
         resolution: exportResolution.value,

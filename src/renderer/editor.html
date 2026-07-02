@@ -28,13 +28,18 @@
       <div class="transport">
         <button id="playBtn">▶ تشغيل</button>
         <span class="time-label" id="timeLabel">00:00 / 00:00</span>
-        <div class="timeline-stack" id="timelineStack">
-          <div class="tl-overlays" id="tlOverlays"></div>
-          <div class="timeline" id="timeline"></div>
-          <div class="tl-audio" id="tlAudio"></div>
-          <div class="playhead" id="playhead"></div>
+        <div class="timeline-scroll" id="timelineScroll">
+          <div class="timeline-stack" id="timelineStack">
+            <div class="tl-ruler" id="tlRuler"></div>
+            <div class="tl-overlays" id="tlOverlays"></div>
+            <div class="timeline" id="timeline"></div>
+            <div class="tl-audio" id="tlAudio"></div>
+            <div class="playhead" id="playhead"></div>
+          </div>
         </div>
         <div class="tl-actions">
+          <label class="switch tl-link" title="عند إيقافه: قصّ الفيديو لا يقصّ الصوت"><input type="checkbox" id="linkAudio" checked /> 🔗 الصوت</label>
+          <div class="tl-zoom"><span>تكبير</span><input type="range" id="tlZoomRange" min="1" max="20" step="0.5" value="1" title="تكبير الخط الزمني (Ctrl+عجلة الفأرة)" /></div>
           <button class="btn-ghost tl-addtrack" id="addTrackBtn" title="أضف طبقة فيديو فوق المسار الرئيسي">＋ طبقة</button>
           <button class="btn-ghost tl-addtrack" id="voBtn" title="سجّل تعليقًا صوتيًا فوق الخط الزمني">🎙 تعليق</button>
         </div>

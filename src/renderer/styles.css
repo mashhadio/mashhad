@@ -497,13 +497,26 @@ kbd {
 }
 
 /* ---- Multi-track timeline (overlay video layers above the main track) ---- */
-.timeline-stack { flex: 1; position: relative; display: flex; flex-direction: column; gap: 5px; }
+/* Horizontal-scroll viewport; the stack inside is widened to zoom the timeline. */
+.timeline-scroll { flex: 1; overflow-x: auto; overflow-y: hidden; }
+.timeline-stack { position: relative; display: flex; flex-direction: column; gap: 5px; width: 100%; }
 .timeline-stack .timeline { flex: none; width: 100%; }
 .tl-overlays { display: flex; flex-direction: column; gap: 5px; }
 .timeline-stack > .playhead {
   position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent);
   pointer-events: none; z-index: 20;
 }
+/* Seconds ruler above the tracks. */
+.tl-ruler { position: relative; height: 16px; width: 100%; }
+.tl-ruler .tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--border); }
+.tl-ruler .tick-label {
+  position: absolute; top: 1px; font-size: 9px; color: var(--muted);
+  transform: translateX(3px); pointer-events: none; user-select: none; font-variant-numeric: tabular-nums;
+}
+.tl-actions { display: flex; flex-direction: column; gap: 6px; align-self: flex-start; }
+.tl-zoom { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.tl-zoom input[type=range] { width: 90px; }
+.tl-link { white-space: nowrap; font-size: 12px; }
 .tl-addtrack { white-space: nowrap; align-self: flex-start; }
 /* An overlay track row. Higher rows draw on top of the main video. */
 .tl-row {
@@ -546,7 +559,6 @@ kbd {
 
 /* ---- Audio tracks (voice-over / audio clips), rendered below the main track ---- */
 .tl-audio { display: flex; flex-direction: column; gap: 5px; }
-.tl-actions { display: flex; flex-direction: column; gap: 6px; align-self: flex-start; }
 #voBtn.recording { background: #ef4444; color: #fff; border-color: #ef4444; }
 /* Audio clip: amber-tinted with a waveform-ish feel. */
 .aclip {

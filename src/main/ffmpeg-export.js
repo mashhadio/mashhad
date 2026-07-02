@@ -145,15 +145,20 @@ function probeHeight(filePath) {
 // is normalised to stereo 48 kHz so concat is valid. Returns the output label, or
 // null when the whole timeline is silent. `addInput(path)` registers an ffmpeg
 // input and returns its index.
-function buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourceId, noiseChain) {
+function buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourceId, noiseChain, recordingAudioMuted) {
   const STEREO = 'aformat=sample_rates=48000:channel_layouts=stereo';
+  // A clip contributes audio unless its source is silent, or it's a recording
+  // clip whose audio was detached (muted here; supplied by the detached clip).
+  const clipHasAudio = (c) => {
+    const s = sources[c.sourceId];
+    return !!(s && s.hasAudio) && !(recordingAudioMuted && c.sourceId === recordingSourceId);
+  };
 
   // Count how many clips draw audio from each source, then register one input
   // per audio-bearing source and fan it out into one copy per consuming clip.
   const used = {}; // sourceId -> { index, count, queue: [pad labels] }
   for (const c of cutSegs) {
-    const s = sources[c.sourceId];
-    if (s && s.hasAudio) (used[c.sourceId] || (used[c.sourceId] = { count: 0 })).count++;
+    if (clipHasAudio(c)) (used[c.sourceId] || (used[c.sourceId] = { count: 0 })).count++;
   }
   const ids = Object.keys(used);
   if (!ids.length) return null; // entirely silent timeline -> no audio track
@@ -174,9 +179,8 @@ function buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourc
 
   const segLabels = [];
   cutSegs.forEach((c, i) => {
-    const s = sources[c.sourceId];
     const seg = `[seg${i}]`;
-    if (s && s.hasAudio) {
+    if (clipHasAudio(c)) {
       const pad = used[c.sourceId].queue.shift();
       const denoise = c.sourceId === recordingSourceId && noiseChain ? `,${noiseChain}` : '';
       const tempo = atempoChain(c.speed);
@@ -220,6 +224,7 @@ async function exportVideo({
   zoomedVideoPath,
   clips = null,
   overlayClips = [],
+  recordingAudioMuted = false,
   sources = {},
   recordingSourceId = null,
   noiseProfile,
@@ -242,7 +247,11 @@ async function exportVideo({
   // Each clip pulls audio from its own source, trimmed to its range, and the
   // segments are concatenated in edit order so audio tracks the cut video.
   const recPath = recordingSourceId && sources[recordingSourceId] ? sources[recordingSourceId].path : null;
-  const recHasAudio = !!(recordingSourceId && sources[recordingSourceId] && sources[recordingSourceId].hasAudio);
+  // When the mic audio is detached, the recording VIDEO clips contribute no audio
+  // (the detached clip in overlayClips provides it instead), so treat rec as
+  // silent for the video-clip audio path.
+  const recHasAudio = !recordingAudioMuted
+    && !!(recordingSourceId && sources[recordingSourceId] && sources[recordingSourceId].hasAudio);
 
   // No clip list => unedited single recording: keep the original simple path.
   const cutSegs = Array.isArray(clips) && clips.length ? clips : null;
@@ -336,7 +345,7 @@ async function exportVideo({
     }
   } else {
     chLayout = 'stereo';
-    voiceLabel = buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourceId, noiseChain);
+    voiceLabel = buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourceId, noiseChain, recordingAudioMuted);
   }
 
   // ---- Overlay-track audio: each clip trimmed from its source, sped (atempo),
