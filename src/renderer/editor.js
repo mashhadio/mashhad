@@ -404,9 +404,9 @@ function setActiveEl(id) {
   try { if (video) { video.pause(); video.muted = true; } } catch (_) {}
   activeSourceId = id;
   video = s.el;
-  // Recording plays through the cleaned-audio track (or its own); imports play
-  // their own audio directly.
-  video.muted = s.kind === 'recording' ? cleanAudioActive : false;
+  // Recording plays through the cleaned-audio track (or its own), and is muted
+  // when the audio is detached; imports play their own audio directly.
+  video.muted = s.kind === 'recording' ? (cleanAudioActive || isAudioDetached()) : false;
 }
 
 // Draw an imported frame letterboxed ("contain") into the working canvas so a
@@ -2181,6 +2181,7 @@ function detachAudio() {
   trk.clips.push({ id: audioClipSeq++, sourceId: recording.id, start: 0, end: dur, pos: 0, speed: 1, gain: 1, voice: true, detached: true });
   audioTracks.push(trk);
   buildTimeline();
+  updateAudioRouting(); // mute the recording video now, even mid-playback
   seekEdited(clamp(playheadEdited, 0, editedDuration()));
 }
 
@@ -2190,6 +2191,7 @@ function reattachAudio() {
   pushHistory();
   audioTracks.forEach((t) => { t.clips = t.clips.filter((c) => !c.detached); });
   buildTimeline();
+  updateAudioRouting(); // unmute the recording video again, even mid-playback
   seekEdited(clamp(playheadEdited, 0, editedDuration()));
 }
 
