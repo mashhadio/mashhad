@@ -13,6 +13,11 @@ const { exportVideo, exportCleanAudio, probeHasAudio } = require('./ffmpeg-expor
 // Paths / state
 // ---------------------------------------------------------------------------
 const RECORDINGS_DIR = path.join(app.getPath('videos'), 'SmoothScreenRecorder');
+// Saved project files (.ssproj) and their persistent assets (voice-overs) live
+// here so a project can be reopened long after the session that created it.
+const PROJECTS_DIR = path.join(RECORDINGS_DIR, 'Projects');
+const PROJECT_ASSETS_DIR = path.join(PROJECTS_DIR, 'assets');
+const PROJECT_EXT = 'ssproj';
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -83,6 +88,11 @@ if (!app.requestSingleInstanceLock()) {
 
 // The project currently loaded in the editor.
 let currentProject = null; // { videoPath, cursorPath, hasAudio, display, recBaseEpoch }
+// Absolute path of the .ssproj file backing the current session, once the user
+// has saved (or opened) one — lets Save and auto-save write without re-prompting.
+let currentProjectFile = null;
+// Edit-state parsed from an opened .ssproj, handed to the editor once it loads.
+let pendingProject = null; // { edit, sources } | null
 
 // Timeline media sources keyed by id. The editor's clips reference these by id;
 // export resolves each clip's audio back to a file here. The recording (when the
@@ -93,11 +103,8 @@ let importSeq = 1;
 let voiceOverSeq = 1;
 
 function resetMediaSources() {
-  // Remove any voice-over temp files from the previous session before clearing.
-  for (const id of Object.keys(mediaSources)) {
-    const s = mediaSources[id];
-    if (s && s.kind === 'voiceover') { try { fs.unlinkSync(s.path); } catch (_) {} }
-  }
+  // Voice-overs are kept on disk (in PROJECT_ASSETS_DIR) so saved projects that
+  // reference them survive across sessions; they're no longer deleted here.
   mediaSources = {};
   importSeq = 1;
   voiceOverSeq = 1;
@@ -139,6 +146,13 @@ function createWindow() {
   // If the main window closes mid-recording, tear down the always-on-top overlay
   // windows so they don't keep the app alive (blocking 'window-all-closed').
   mainWindow.on('closed', () => { hideSceneIndicator(); hideRecFrame(); });
+
+  // Tell the renderer when the window gains/loses focus so it can pause the live
+  // previews while the user is working in another app (backgroundThrottling is
+  // off, so previews would otherwise keep capturing the screen in the background).
+  const sendFocus = (focused) => { if (!wc.isDestroyed()) wc.send('window:focus', focused); };
+  mainWindow.on('focus', () => sendFocus(true));
+  mainWindow.on('blur', () => sendFocus(false));
 
   // Surface renderer console output to the terminal (dev only).
   if (!app.isPackaged) {
@@ -560,6 +574,8 @@ ipcMain.handle('rec:finish', async (_evt, { hasAudio }) => {
     display: s.display,
     recBaseEpoch: s.recBaseEpoch,
   };
+  currentProjectFile = null; // fresh recording — not tied to any saved project yet
+  pendingProject = null;
   return { ok: true };
 });
 
@@ -580,6 +596,8 @@ ipcMain.handle('rec:abort', async () => {
 });
 
 ipcMain.handle('editor:open', async () => {
+  currentProjectFile = null;
+  pendingProject = null;
   resetMediaSources();
   loadEditor();
   return { ok: true };
@@ -589,6 +607,8 @@ ipcMain.handle('editor:open', async () => {
 // importing videos.
 ipcMain.handle('studio:open', async () => {
   currentProject = null;
+  currentProjectFile = null;
+  pendingProject = null;
   resetMediaSources();
   loadEditor();
   return { ok: true };
@@ -649,7 +669,9 @@ ipcMain.handle('source:importAudio', async () => {
 ipcMain.handle('voiceover:save', async (_evt, buffer) => {
   if (!buffer) return null;
   const id = `vo_${voiceOverSeq++}`;
-  const p = path.join(os.tmpdir(), `ssr-vo-${Date.now()}-${id}.webm`);
+  // Persistent (not tmp) so a saved project can still resolve this take later.
+  ensureDir(PROJECT_ASSETS_DIR);
+  const p = path.join(PROJECT_ASSETS_DIR, `vo-${Date.now()}-${id}.webm`);
   fs.writeFileSync(p, Buffer.from(buffer));
   mediaSources[id] = { path: p, hasAudio: true, kind: 'voiceover' };
   return { id, url: pathToFileUrl(p), path: p };
@@ -703,6 +725,8 @@ ipcMain.handle('recordings:open', async (_evt, videoPath) => {
     hasAudio, hasCam, display: meta.display, recBaseEpoch: meta.recBaseEpoch,
   };
 
+  currentProjectFile = null; // opening the raw recording, not a saved project
+  pendingProject = null;
   resetMediaSources();
   loadEditor();
   return { ok: true };
@@ -718,7 +742,15 @@ ipcMain.handle('editor:back-home', async () => {
 // ---------------------------------------------------------------------------
 ipcMain.handle('project:get', async () => {
   if (!currentProject) return { recording: null };
-  const cursor = JSON.parse(fs.readFileSync(currentProject.cursorPath, 'utf8'));
+  // The cursor sidecar may be gone (e.g. a saved project whose recording folder
+  // was moved). Fall back to empty tracking data so the editor still opens with
+  // a graceful "missing file" notice instead of failing to initialize.
+  let cursor;
+  try {
+    cursor = JSON.parse(fs.readFileSync(currentProject.cursorPath, 'utf8'));
+  } catch (_) {
+    cursor = { display: currentProject.display || screen.getPrimaryDisplay(), samples: [], clicks: [] };
+  }
   // Register the recording as the timeline's first media source.
   mediaSources.rec = { path: currentProject.videoPath, hasAudio: currentProject.hasAudio, kind: 'recording' };
   // Scene switches (screen/cam/both), if this recording used scene mode.
@@ -746,6 +778,210 @@ function pathToFileUrl(p) {
   // or "C:\Users\John Doe\..." produce a valid file:// URL the renderer can load.
   return pathToFileURL(p).href;
 }
+
+// ---------------------------------------------------------------------------
+// IPC: project save / open (.ssproj). A project file is a JSON snapshot of the
+// editor's edit-state plus references (absolute paths) to every media file it
+// uses, so the whole timeline can be rebuilt later. Media (recording, imports,
+// voice-overs) is referenced in place — not copied — since those live in
+// persistent folders.
+// ---------------------------------------------------------------------------
+
+// Turn the renderer's edit-state + source manifest into the object we persist.
+// The recording's file paths come from currentProject (the renderer only knows
+// URLs); imported/voice-over paths are resolved from mediaSources by id.
+function buildProjectData({ edit, sources }) {
+  const rec = currentProject
+    ? {
+        videoPath: currentProject.videoPath,
+        cursorPath: currentProject.cursorPath,
+        camPath: currentProject.camPath || null,
+        scenesPath: currentProject.scenesPath || null,
+        hasAudio: currentProject.hasAudio,
+        hasCam: currentProject.hasCam,
+        display: currentProject.display,
+        recBaseEpoch: currentProject.recBaseEpoch,
+      }
+    : null;
+  const srcOut = (sources || []).map((s) => ({
+    id: s.id, kind: s.kind, name: s.name, hasAudio: !!s.hasAudio, isVideo: !!s.isVideo,
+    path: (mediaSources[s.id] && mediaSources[s.id].path) || s.path || null,
+  })).filter((s) => s.path);
+  return { format: PROJECT_EXT, version: 1, savedAt: Date.now(), recording: rec, sources: srcOut, edit };
+}
+
+function defaultProjectName() {
+  const base = currentProject
+    ? path.basename(currentProject.videoPath).replace(/\.[^.]+$/, '')
+    : 'مشروع';
+  return `${base}.${PROJECT_EXT}`;
+}
+
+// Best-effort background cleanup, run once at startup. The single-instance lock
+// means no other run holds live references, and the in-memory caches don't
+// survive a restart, so anything found here is safe to remove. Fully async (and
+// called fire-and-forget after the window is created) so it never blocks startup
+// or the event loop. Removes: (1) voice-over assets no saved project references,
+// and (2) stale temp files from earlier sessions (cleaned-audio previews, and any
+// export intermediate a crash left behind).
+async function cleanupStaleFiles() {
+  const fsp = fs.promises;
+  // (1) Orphaned voice-over assets.
+  try {
+    const assets = await fsp.readdir(PROJECT_ASSETS_DIR).catch(() => []);
+    if (assets.length) {
+      const referenced = new Set();
+      const projects = await fsp.readdir(PROJECTS_DIR).catch(() => []);
+      for (const f of projects) {
+        if (!f.endsWith(`.${PROJECT_EXT}`)) continue;
+        try {
+          const data = JSON.parse(await fsp.readFile(path.join(PROJECTS_DIR, f), 'utf8'));
+          for (const s of data.sources || []) if (s.path) referenced.add(path.resolve(s.path));
+        } catch (_) { /* skip unreadable project files */ }
+      }
+      for (const f of assets) {
+        const full = path.resolve(path.join(PROJECT_ASSETS_DIR, f));
+        if (!referenced.has(full)) await fsp.unlink(full).catch(() => {});
+      }
+    }
+  } catch (_) { /* best-effort */ }
+  // (2) Stale ssr-* temp files from previous runs (previews / intermediates).
+  try {
+    const tmp = os.tmpdir();
+    for (const f of await fsp.readdir(tmp).catch(() => [])) {
+      if (/^ssr-(clean|zoomed|vo)-/.test(f)) await fsp.unlink(path.join(tmp, f)).catch(() => {});
+    }
+  } catch (_) { /* best-effort */ }
+}
+
+// Atomic write: serialize to a temp file in the same directory, then rename over
+// the target. A crash/power-loss mid-write leaves the previous good file intact
+// instead of a truncated (unparseable) project.
+function writeProjectFile(target, payload) {
+  const data = buildProjectData(payload);
+  const tmp = `${target}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, target);
+}
+
+// Manual save. `saveAs` (or no bound file yet) prompts for a location; otherwise
+// it overwrites the current project file silently.
+ipcMain.handle('project:save', async (_evt, { edit, sources, saveAs }) => {
+  let target = currentProjectFile;
+  if (saveAs || !target) {
+    ensureDir(PROJECTS_DIR);
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: 'حفظ المشروع',
+      defaultPath: path.join(PROJECTS_DIR, defaultProjectName()),
+      filters: [{ name: 'مشروع مشهد', extensions: [PROJECT_EXT] }],
+    });
+    if (canceled || !filePath) return { canceled: true };
+    target = filePath;
+  }
+  try {
+    writeProjectFile(target, { edit, sources });
+  } catch (err) {
+    return { error: err.message };
+  }
+  currentProjectFile = target;
+  return { path: target, name: path.basename(target) };
+});
+
+// Background auto-save. Writes only when a project file is already bound (the
+// user has saved at least once, or opened a project) — never prompts.
+ipcMain.handle('project:autosave', async (_evt, { edit, sources }) => {
+  if (!currentProjectFile) return { skipped: true };
+  try {
+    writeProjectFile(currentProjectFile, { edit, sources });
+    return { path: currentProjectFile };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// Open a .ssproj: parse it, rebuild currentProject + mediaSources, stash the
+// edit-state for the editor to apply on load, then swap to the editor.
+ipcMain.handle('project:open', async () => {
+  ensureDir(PROJECTS_DIR);
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: 'فتح مشروع',
+    defaultPath: PROJECTS_DIR,
+    properties: ['openFile'],
+    filters: [{ name: 'مشروع مشهد', extensions: [PROJECT_EXT] }],
+  });
+  if (canceled || !filePaths.length) return { canceled: true };
+  return loadProjectFile(filePaths[0]);
+});
+
+function loadProjectFile(file) {
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {
+    return { error: 'تعذّر قراءة ملف المشروع' };
+  }
+  if (!data || data.format !== PROJECT_EXT) return { error: 'ملف مشروع غير صالح' };
+
+  // Rebuild the recording reference (studio-only projects have none).
+  const missing = [];
+  if (data.recording) {
+    const r = data.recording;
+    if (!fs.existsSync(r.videoPath)) missing.push(path.basename(r.videoPath));
+    currentProject = {
+      videoPath: r.videoPath,
+      cursorPath: r.cursorPath,
+      camPath: r.camPath && fs.existsSync(r.camPath) ? r.camPath : null,
+      scenesPath: r.scenesPath && fs.existsSync(r.scenesPath) ? r.scenesPath : null,
+      hasAudio: r.hasAudio,
+      hasCam: !!(r.camPath && fs.existsSync(r.camPath)),
+      display: r.display,
+      recBaseEpoch: r.recBaseEpoch,
+    };
+  } else {
+    currentProject = null;
+  }
+
+  // Rebuild the media-source registry so export/preview can resolve every clip.
+  resetMediaSources();
+  let maxImp = 0;
+  let maxVo = 0;
+  for (const s of data.sources || []) {
+    if (s.id === 'rec') continue; // the recording is registered by project:get
+    if (!s.path || !fs.existsSync(s.path)) { missing.push(s.name || (s.path ? path.basename(s.path) : s.id)); continue; }
+    mediaSources[s.id] = { path: s.path, hasAudio: !!s.hasAudio, kind: s.kind };
+    const m = /^imp_(\d+)$/.exec(s.id); if (m) maxImp = Math.max(maxImp, +m[1]);
+    const v = /^vo_(\d+)$/.exec(s.id); if (v) maxVo = Math.max(maxVo, +v[1]);
+  }
+  importSeq = maxImp + 1;
+  voiceOverSeq = maxVo + 1;
+
+  // Hand every non-recording source to the editor. Present files get a fresh
+  // file:// URL; a missing file gets url:null so the editor keeps the manifest
+  // entry (with its original path) unrendered — re-saving then preserves the
+  // reference instead of pruning it (e.g. an external drive that was unplugged).
+  const okIds = new Set(Object.keys(mediaSources));
+  const sourcesForEditor = (data.sources || [])
+    .filter((s) => s.id !== 'rec')
+    .map((s) => ({ ...s, url: okIds.has(s.id) ? pathToFileUrl(s.path) : null }));
+  pendingProject = { edit: data.edit, sources: sourcesForEditor, missing };
+  currentProjectFile = file;
+
+  loadEditor();
+  return { ok: true, name: path.basename(file), missing };
+}
+
+// The editor pulls its saved edit-state here right after loading (null when the
+// session wasn't opened from a project file).
+ipcMain.handle('project:pending', async () => {
+  const p = pendingProject;
+  pendingProject = null; // consume once so a later reload starts clean
+  return p;
+});
+
+// Whether the current editor session is backed by a saved file (for UI state).
+ipcMain.handle('project:file', async () => {
+  return { path: currentProjectFile, name: currentProjectFile ? path.basename(currentProjectFile) : null };
+});
 
 // ---------------------------------------------------------------------------
 // IPC: export
@@ -798,6 +1034,7 @@ ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
       sources: sourceInfo,
       recordingSourceId: mediaSources.rec ? 'rec' : null,
       noiseProfile: options.noiseProfile,
+      echoLevel: options.echoLevel || 'off',
       clickSound: options.clickSound,
       clickTimes: options.clickTimes || [],
       clickSoundName: options.clickSoundName || 'mouse',
@@ -820,14 +1057,18 @@ ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
 
 // Render the cleaned mic audio for in-editor preview (cached per profile).
 const audioPreviewCache = {}; // key `${videoPath}|${profile}` -> file path
-ipcMain.handle('audio:preview', async (_evt, profile) => {
-  if (!currentProject || !currentProject.hasAudio || profile === 'off') return null;
-  const key = `${currentProject.videoPath}|${profile}`;
+ipcMain.handle('audio:preview', async (_evt, opts) => {
+  // Back-compat: a bare string is the profile; the object form adds echoLevel.
+  const profile = typeof opts === 'string' ? opts : (opts && opts.profile) || 'off';
+  const echoLevel = (typeof opts === 'object' && opts && opts.echoLevel) || 'off';
+  // Nothing to render when neither cleanup is active.
+  if (!currentProject || !currentProject.hasAudio || (profile === 'off' && echoLevel === 'off')) return null;
+  const key = `${currentProject.videoPath}|${profile}|echo:${echoLevel}`;
   if (audioPreviewCache[key] && fs.existsSync(audioPreviewCache[key])) {
     return pathToFileUrl(audioPreviewCache[key]);
   }
-  const out = path.join(os.tmpdir(), `ssr-clean-${profile}-${Date.now()}.m4a`);
-  await exportCleanAudio({ inputPath: currentProject.videoPath, noiseProfile: profile, outputPath: out });
+  const out = path.join(os.tmpdir(), `ssr-clean-${profile}-echo${echoLevel}-${Date.now()}.m4a`);
+  await exportCleanAudio({ inputPath: currentProject.videoPath, noiseProfile: profile, echoLevel, outputPath: out });
   audioPreviewCache[key] = out;
   return pathToFileUrl(out);
 });
@@ -886,6 +1127,8 @@ app.whenReady().then(() => {
 
   requestMacMediaAccess();
   createWindow();
+  // Deferred + async so cleanup never delays the window appearing.
+  cleanupStaleFiles().catch(() => {});
 
   globalShortcut.register(RECORD_SHORTCUT, () => {
     if (mainWindow && !mainWindow.isDestroyed()) {

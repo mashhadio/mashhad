@@ -13,6 +13,8 @@
       <div class="dot"></div>
       <h1>المحرر</h1>
       <button class="btn-ghost" id="backBtn" style="margin-inline-start:10px" title="العودة إلى شاشة التسجيل">⬅ شاشة التسجيل</button>
+      <button class="btn-ghost" id="saveProjectBtn" title="حفظ المشروع لمتابعته لاحقًا (Ctrl+S)">💾 حفظ المشروع</button>
+      <button class="btn-ghost" id="openProjectBtn" title="فتح مشروع محفوظ">📂 فتح مشروع</button>
       <div class="spacer"></div>
       <span class="status" id="topStatus"></span>
       <button class="btn-ghost" id="shortcutsBtn" title="اختصارات لوحة المفاتيح">⌨ اختصارات</button>
@@ -204,6 +206,15 @@
               <option value="off">إيقاف</option>
               <option value="light">خفيفة</option>
               <option value="medium" selected>متوسطة</option>
+              <option value="strong">قوية</option>
+            </select>
+          </div>
+          <div class="slider">
+            <span>إزالة الصدى</span>
+            <select id="echoLevel" title="يقلّل صدى الغرفة والترديد في الصوت (يجفّف الصوت)">
+              <option value="off" selected>إيقاف</option>
+              <option value="light">خفيفة</option>
+              <option value="medium">متوسطة</option>
               <option value="strong">قوية</option>
             </select>
           </div>

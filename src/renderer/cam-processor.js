@@ -86,6 +86,17 @@
 
     getStream(fps = 30) { return this.canvas.captureStream(fps); }
 
+    // The stream to RECORD. With no background effect, hand back the raw webcam
+    // stream directly: its frames come straight from the camera (encoded off the
+    // main thread), so the recording doesn't stutter when the per-frame canvas
+    // redraw stalls under the CPU load of a simultaneous screen encode — the
+    // cause of choppy webcam files. Background replacement still needs the
+    // processed canvas, so fall back to it when a background is active.
+    recordStream(fps = 30) {
+      if (this.bgMode === 'none' && this.rawStream) return this.rawStream;
+      return this.canvas.captureStream(fps);
+    }
+
     async _loop() {
       if (!this.running) return;
       try {

@@ -374,7 +374,7 @@ kbd {
 .timeline {
   flex: 1;
   position: relative;
-  height: 56px;
+  height: 84px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -423,7 +423,15 @@ kbd {
 .timeline .clip-label {
   font-size: 11px; color: var(--muted); pointer-events: none;
   font-variant-numeric: tabular-nums; user-select: none;
+  position: relative; z-index: 1;
 }
+/* Audio waveform painted inside a clip, behind its label. */
+.clip-wave {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  z-index: 0; pointer-events: none; opacity: 1;
+}
+.aclip .clip-label { position: relative; z-index: 1; }
+.timeline .clip-delete, .aclip .clip-delete { z-index: 2; }
 .timeline .clip-delete {
   position: absolute; top: 3px; right: 3px;
   width: 16px; height: 16px; padding: 0;

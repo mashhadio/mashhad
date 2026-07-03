@@ -175,6 +175,11 @@ let recState = null; // { display, recBaseEpoch, hasAudio, hasCam }
 let timerInt = null;
 let streams = [];
 let isRecording = false;
+// True from the moment a recording is requested until it's actually running (or
+// aborted). startRecording awaits several async steps before isRecording flips
+// true; during that window the preview-pause logic must NOT stop the camera the
+// recording is about to capture, so it treats `arming` like `isRecording`.
+let arming = false;
 let sources = []; // current list for the active tab
 let previewStream = null; // live screen-preview capture
 let selectedRegion = null; // { x, y, w, h } in DIP rel. to the display, or null
@@ -390,7 +395,12 @@ async function startScreenPreview(source) {
         mandatory: {
           chromeMediaSource: 'desktop',
           chromeMediaSourceId: source.id,
-          maxFrameRate: 15, // low fps — it's just a preview
+          // It's only a small on-screen preview: capture downscaled and at a low
+          // frame rate so a 4K / multi-monitor desktop isn't continuously
+          // captured at full resolution (a real CPU/GPU drain while idle here).
+          maxWidth: 1280,
+          maxHeight: 720,
+          maxFrameRate: 10,
         },
       },
     });
@@ -650,6 +660,47 @@ camSelect.addEventListener('change', () => {
   if (camPreviewOn) startCamPreview();
 });
 
+// While the window is hidden (minimized / on another desktop), stop the live
+// screen/camera previews and the mic meter so the app isn't continuously
+// capturing in the background — backgroundThrottling is off, so nothing else
+// throttles them. Recording is never touched: it owns an independent stream and
+// stops the preview itself, and this guard bails while recording.
+let hiddenPause = null;
+// Bumped on every pause/resume so an in-flight async pause can detect that a
+// resume superseded it and abort mid-teardown (otherwise its awaited stops would
+// tear down previews the resume just restarted, leaving them dark).
+let previewGen = 0;
+async function pausePreviewsForHide() {
+  if (isRecording || arming || hiddenPause) return;
+  const gen = ++previewGen;
+  hiddenPause = { screen: !!previewStream, cam: camPreviewOn, camMode: currentKind === 'camera', mic: !!micMonitorRAF };
+  if (previewStream) { await stopScreenPreview(); if (gen !== previewGen) return; }
+  if (camPreviewOn) { await camProcessor.stop(); camPreviewOn = false; if (gen !== previewGen) return; }
+  stopMicMonitor();
+}
+function resumePreviewsAfterHide() {
+  const snap = hiddenPause;
+  hiddenPause = null;
+  previewGen++; // supersede any in-flight pause
+  if (!snap || isRecording || arming) return;
+  if (snap.cam && snap.camMode) startCameraModePreview();
+  else {
+    if (snap.screen && selectedSource) startScreenPreview(selectedSource);
+    if (snap.cam) startCamPreview();
+  }
+  if (snap.mic && micEnabled.checked && !micEnabled.disabled) startMicMonitor();
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) pausePreviewsForHide();
+  else resumePreviewsAfterHide();
+});
+// Window-focus changes catch the common case the Page Visibility API misses: the
+// recorder left open behind the app the user is actually recording.
+window.api.onWindowFocus((focused) => {
+  if (focused) { if (!document.hidden) resumePreviewsAfterHide(); }
+  else pausePreviewsForHide();
+});
+
 // ---------------------------------------------------------------------------
 // Camera background picker (none / blur / color / gradient / uploaded image)
 // ---------------------------------------------------------------------------
@@ -757,6 +808,7 @@ sceneTrans.addEventListener('input', () => { sceneTransVal.textContent = sceneTr
 // ---------------------------------------------------------------------------
 function resetRecordingUI() {
   isRecording = false;
+  arming = false;
   recBanner.classList.remove('active');
   recordBtn.style.display = '';
   recordBtn.textContent = '● بدء التسجيل';
@@ -845,8 +897,10 @@ async function startCameraRecording() {
     ({ recBaseEpoch } = await window.api.startRecording({ display: null, kind: 'camera', region: null }));
 
     if (!camPreviewOn) await startCameraModePreview();
-    const camStream = camProcessor.getStream(fps);
-    streams.push(camStream);
+    const camStream = camProcessor.recordStream(fps);
+    // Canvas stream is tracked for teardown; the raw webcam stream is owned by
+    // camProcessor (stopping it here would kill its preview).
+    if (camStream !== camProcessor.rawStream) streams.push(camStream);
     const tracks = [...camStream.getVideoTracks()];
 
     stopMicMonitor();
@@ -876,6 +930,7 @@ async function startCameraRecording() {
 
     recState = { display: null, recBaseEpoch, hasAudio, hasCam: false };
     isRecording = true;
+    arming = false;
     recBanner.classList.add('active');
     recordBtn.style.display = 'none';
     recordBtn.textContent = '● جارٍ التسجيل…';
@@ -893,6 +948,7 @@ async function startCameraRecording() {
 async function startRecording() {
   if (!selectedSource || isRecording) return;
   recordBtn.disabled = true;
+  arming = true; // block preview-pause from stopping the camera during setup
 
   // Camera mode records the processed camera canvas directly (no screen capture).
   if (currentKind === 'camera') return startCameraRecording();
@@ -901,6 +957,7 @@ async function startRecording() {
   // recording a black screen. (No-op / always ok on Windows.)
   const perm = await window.api.ensureScreenPermission();
   if (!perm.ok) {
+    arming = false;
     topStatus.textContent = 'فعّل تسجيل الشاشة من إعدادات النظام، ثم أغلق التطبيق وأعد فتحه.';
     recordBtn.disabled = !selectedSource;
     return;
@@ -986,8 +1043,11 @@ async function startRecording() {
     if (useCam) {
       try {
         if (!camPreviewOn) await startCamPreview();
-        const camStream = camProcessor.getStream(30);
-        streams.push(camStream);
+        const camStream = camProcessor.recordStream(30);
+        // Only track (and thus tear down) the canvas stream. The raw webcam
+        // stream is owned by camProcessor — stopping it here would kill its live
+        // preview; camProcessor.stop() releases it.
+        if (camStream !== camProcessor.rawStream) streams.push(camStream);
         // Webcam runs a second concurrent encoder — let it follow the same
         // preset so "performance" mode lightens this too (VP8 + lower bitrate).
         const camTrack = camStream.getVideoTracks()[0]?.getSettings?.() || {};
@@ -1025,6 +1085,7 @@ async function startRecording() {
 
     recState = { display, recBaseEpoch, hasAudio, hasCam };
     isRecording = true;
+    arming = false;
 
     recBanner.classList.add('active');
     recordBtn.style.display = 'none'; // the live indicator + stop take over while recording
@@ -1147,6 +1208,22 @@ if (openStudioBtn) {
   openStudioBtn.addEventListener('click', async () => {
     topStatus.textContent = 'جارٍ فتح الاستوديو…';
     await window.api.openStudio();
+  });
+}
+
+// Open a saved .ssproj project — the main process swaps to the editor and
+// restores the timeline. Reports missing media if any referenced file moved.
+const openProjectBtn = document.getElementById('openProjectBtn');
+if (openProjectBtn) {
+  openProjectBtn.addEventListener('click', async () => {
+    topStatus.textContent = 'جارٍ فتح المشروع…';
+    try {
+      const res = await window.api.openProject();
+      if (res && res.canceled) { topStatus.textContent = ''; return; }
+      if (res && res.error) { topStatus.textContent = res.error; return; }
+    } catch (err) {
+      topStatus.textContent = 'تعذّر فتح المشروع: ' + (err.message || err);
+    }
   });
 }
 

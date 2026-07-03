@@ -49,6 +49,7 @@ const zoomLevelLabel = document.getElementById('zoomLevelLabel');
 const smoothRamp = document.getElementById('smoothRamp');
 const smoothVal = document.getElementById('smoothVal');
 const noiseProfile = document.getElementById('noiseProfile');
+const echoLevel = document.getElementById('echoLevel');
 const audioStatus = document.getElementById('audioStatus');
 
 const camControls = document.getElementById('camControls');
@@ -142,6 +143,10 @@ const audioEls = new Map(); // clipId -> <audio>
 let voState = null; // active voice-over recording: { recorder, chunks, startPos, stream, startTime }
 let voArming = false; // true between the VO click and the mic stream resolving
 
+// Name of the .ssproj backing this session (set after a manual save or when the
+// editor was opened from a project). While set, edits are auto-saved to it.
+let projectFileName = null;
+
 // Clip transitions. Each clip can carry an intro `transition` ({type,duration})
 // describing how it enters from the previous clip — so it follows the clip on
 // reorder. We render it without a second decoder: when playback leaves a clip we
@@ -230,8 +235,10 @@ async function init() {
 
   const recHasAudio = !!(recording && recording.hasAudio);
   noiseProfile.disabled = !recHasAudio;
+  echoLevel.disabled = !recHasAudio; // echo removal only applies to the mic track
   if (!recHasAudio) {
     noiseProfile.value = 'off';
+    echoLevel.value = 'off';
     noiseProfile.title = recording ? 'لم يُسجَّل أي ميكروفون' : 'لا يوجد تسجيل ميكروفون في جلسة الاستوديو';
   }
 
@@ -295,8 +302,13 @@ async function init() {
   linkAudio.disabled = !(recording && recording.hasAudio);
   linkAudio.closest('.tl-link').style.display = linkAudio.disabled ? 'none' : '';
 
-  // Prepare the cleaned-audio preview in the background for the current profile.
-  if (recHasAudio && noiseProfile.value !== 'off') applyAudioPreview(noiseProfile.value);
+  // If the editor was opened from a saved project, rebuild its timeline now
+  // (after the recording — if any — is set up). This restores clips, blocks,
+  // tracks and settings, so it must run before the audio preview reads them.
+  await applyPendingProject();
+
+  // Prepare the cleaned-audio preview in the background for the current settings.
+  if (recHasAudio && (noiseProfile.value !== 'off' || echoLevel.value !== 'off')) applyAudioPreview();
 }
 
 function setCanvasSize(w, h) {
@@ -586,19 +598,28 @@ function applyEditorPrefs() {
   exportQuality.value = Prefs.get('exportQuality', 'balanced');
   exportResolution.value = Prefs.get('exportResolution', 'original');
 
+  // Echo/reverb removal toggle.
+  echoLevel.value = Prefs.get('echoLevel', 'off');
+
   // Persist on change.
   noiseProfile.addEventListener('change', () => {
     Prefs.set('noiseProfile', noiseProfile.value);
-    applyAudioPreview(noiseProfile.value);
+    applyAudioPreview();
+    markDirty();
+  });
+  echoLevel.addEventListener('change', () => {
+    Prefs.set('echoLevel', echoLevel.value);
+    applyAudioPreview();
+    markDirty();
   });
   smoothRamp.addEventListener('input', () => Prefs.set('smooth', parseFloat(smoothRamp.value)));
   clickFx.addEventListener('change', () => Prefs.set('clickFx', clickFx.checked));
   clickStyle.addEventListener('change', () => Prefs.set('clickStyle', clickStyle.value));
   clickColor.addEventListener('input', () => Prefs.set('clickColor', clickColor.value));
   clickSize.addEventListener('input', () => Prefs.set('clickSize', parseInt(clickSize.value, 10)));
-  clickSound.addEventListener('change', () => Prefs.set('clickSound', clickSound.checked));
-  clickSoundName.addEventListener('change', () => Prefs.set('clickSoundName', clickSoundName.value));
-  clickVol.addEventListener('input', () => Prefs.set('clickVol', parseInt(clickVol.value, 10)));
+  clickSound.addEventListener('change', () => { Prefs.set('clickSound', clickSound.checked); markDirty(); });
+  clickSoundName.addEventListener('change', () => { Prefs.set('clickSoundName', clickSoundName.value); markDirty(); });
+  clickVol.addEventListener('input', () => { Prefs.set('clickVol', parseInt(clickVol.value, 10)); markDirty(); });
   camShow.addEventListener('change', () => Prefs.set('camShow', camShow.checked));
   camPos.addEventListener('change', () => Prefs.set('camPos', camPos.value));
   camShape.addEventListener('change', () => Prefs.set('camShape', camShape.value));
@@ -619,7 +640,34 @@ async function setupCam(url) {
   if (camVideo.videoWidth) {
     camReady = true;
     camControls.style.display = 'flex';
+    // The webcam file (MediaRecorder webm) ships with no duration in its header,
+    // so the browser can't seek it accurately — big jumps (e.g. across a cut)
+    // land wrong or hang, freezing the cam mid-export. Force the same index-by-
+    // seeking-to-the-end trick the main recording uses so every seek is reliable.
+    await resolveCamDuration();
   }
+}
+
+// Force the browser to index the cam webm and learn its real duration by seeking
+// past the end (mirrors resolveDuration for the main recording).
+function resolveCamDuration() {
+  return new Promise((resolve) => {
+    if (isFinite(camVideo.duration) && camVideo.duration > 0) return resolve(camVideo.duration);
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      camVideo.removeEventListener('durationchange', onDur);
+      try { camVideo.currentTime = 0; } catch (_) {}
+      resolve(camVideo.duration);
+    };
+    const onDur = () => { if (isFinite(camVideo.duration)) finish(); };
+    camVideo.addEventListener('durationchange', onDur);
+    camVideo.currentTime = 1e6;
+    // `durationchange` normally fires within ~100ms of the end-seek; this bounds
+    // the worst case (event never fires) so editor load can't stall for long.
+    setTimeout(finish, 1200);
+  });
 }
 
 function resolveDuration() {
@@ -947,13 +995,16 @@ function updateAudioRouting() {
   video.muted = activeIsRecording() ? (cleanAudioActive || isAudioDetached()) : false;
 }
 
-// Render (via ffmpeg) and load the cleaned mic audio for the given profile, then
-// route preview playback through it. profile === 'off' restores the raw audio.
-async function applyAudioPreview(profile) {
+// Render (via ffmpeg) and load the cleaned mic audio for the current settings
+// (noise profile + echo removal), then route preview playback through it. With
+// both off, restore the raw audio.
+async function applyAudioPreview() {
   if (!recording || !recording.hasAudio) return;
+  const profile = noiseProfile.value;
+  const echo = echoLevel.value;
   const myToken = ++audioPreviewToken;
 
-  if (profile === 'off') {
+  if (profile === 'off' && echo === 'off') {
     cleanAudioActive = false;
     cleanAudio.pause();
     updateAudioRouting();
@@ -964,7 +1015,7 @@ async function applyAudioPreview(profile) {
   audioStatus.textContent = '· جارٍ التحضير…';
   let url = null;
   try {
-    url = await window.api.previewAudio(profile);
+    url = await window.api.previewAudio({ profile, echoLevel: echo });
   } catch (err) {
     if (myToken !== audioPreviewToken) return;
     cleanAudioActive = false; // fall back to the raw track rather than a stale one
@@ -1198,6 +1249,94 @@ function relayoutTimeline() {
   movePlayhead(playheadEdited);
 }
 
+// ---------------------------------------------------------------------------
+// Audio waveforms. Each source's file is decoded once into a peak array (one
+// value per PEAKS_PER_SEC-th of a second, 0..1), cached by source id. Clips draw
+// the slice of their source's peaks that they cover, so the waveform tracks the
+// footage across cuts, reorders and speed changes. Decoding is async; a source
+// resolving triggers one rebuild so its clips repaint with the wave.
+// ---------------------------------------------------------------------------
+const PEAKS_PER_SEC = 120;
+const waveformCache = new Map(); // sourceId -> {peaks:Float32Array} | 'pending' | 'none'
+let waveAudioCtx = null;
+
+async function ensureWaveform(src) {
+  if (!src || !src.hasAudio || !src.url) return;
+  if (waveformCache.has(src.id)) return;
+  waveformCache.set(src.id, 'pending');
+  try {
+    // The recording is already decoded (and cached) for remove-silence; reuse it
+    // rather than fetching/decoding the whole file a second time.
+    let audio;
+    if (src.kind === 'recording') {
+      audio = await getRecordingAudioBuffer();
+    } else {
+      waveAudioCtx = waveAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const bytes = await fetch(src.url).then((r) => r.arrayBuffer());
+      audio = await waveAudioCtx.decodeAudioData(bytes);
+    }
+    if (!audio) { waveformCache.set(src.id, 'none'); return; }
+    const totalPeaks = Math.max(1, Math.ceil(audio.duration * PEAKS_PER_SEC));
+    const peaks = new Float32Array(totalPeaks);
+    const per = audio.sampleRate / PEAKS_PER_SEC; // samples per peak bucket
+    let maxPeak = 0;
+    for (let ch = 0; ch < audio.numberOfChannels; ch++) {
+      const data = audio.getChannelData(ch);
+      for (let i = 0; i < data.length; i++) {
+        const b = (i / per) | 0;
+        const a = data[i] < 0 ? -data[i] : data[i];
+        if (a > peaks[b]) peaks[b] = a;
+      }
+    }
+    for (let i = 0; i < peaks.length; i++) if (peaks[i] > maxPeak) maxPeak = peaks[i];
+    waveformCache.set(src.id, { peaks, maxPeak });
+  } catch {
+    waveformCache.set(src.id, 'none'); // undecodable (e.g. codec) — just skip
+  }
+  buildTimeline(); // repaint clips of this source now that peaks exist
+}
+
+// Draw the [startSec, endSec] slice of `src`'s waveform into a canvas sized to
+// the clip element, and prepend it so it sits behind the label. No-op (and kicks
+// off decoding) until the source's peaks are ready. `trackH` is the clip's pixel
+// height, passed in by the caller (read once per track) so this never reads
+// layout inside the per-clip loop — reading it here would force a reflow after
+// each canvas insert (O(N) layout thrash).
+function attachWave(el, src, startSec, endSec, trackH) {
+  if (!src || !src.hasAudio) return;
+  const wf = waveformCache.get(src.id);
+  if (wf === undefined) { ensureWaveform(src); return; }
+  if (wf === 'pending' || wf === 'none') return;
+  const cssW = Math.max(1, Math.round(parseFloat(el.style.width) || 0));
+  if (cssW < 2) return;
+  const cssH = trackH || 48;
+  const dpr = window.devicePixelRatio || 1;
+  const cv = document.createElement('canvas');
+  cv.className = 'clip-wave';
+  cv.width = Math.round(cssW * dpr);
+  cv.height = Math.round(cssH * dpr);
+  const g = cv.getContext('2d');
+  g.scale(dpr, dpr);
+  const { peaks } = wf;
+  // Normalise to the source's loudest moment so quiet takes still fill the track,
+  // then lift with a perceptual curve (raw amplitude looks flat for speech).
+  const norm = wf.maxPeak > 0 ? wf.maxPeak : 1;
+  const startP = startSec * PEAKS_PER_SEC;
+  const rangeP = Math.max(1e-6, (endSec - startSec) * PEAKS_PER_SEC);
+  const mid = cssH / 2;
+  g.fillStyle = 'rgba(150,220,255,0.6)';
+  for (let x = 0; x < cssW; x++) {
+    const p0 = (startP + (x / cssW) * rangeP) | 0;
+    const p1 = (startP + ((x + 1) / cssW) * rangeP) | 0;
+    let peak = 0;
+    for (let p = p0; p <= p1 && p < peaks.length; p++) if (peaks[p] > peak) peak = peaks[p];
+    const v = Math.pow(Math.min(1, peak / norm), 0.55); // 0..1, boosted for quiet parts
+    const bar = Math.max(1, v * mid); // fill the full clip height at the loudest moment
+    g.fillRect(x, mid - bar, 1, bar * 2);
+  }
+  el.insertBefore(cv, el.firstChild);
+}
+
 function buildTimeline() {
   [...timeline.querySelectorAll('.block, .click-tick, .clip')].forEach((n) => n.remove());
   transSnapIdx = -1; // any pending transition snapshot is stale after a rebuild
@@ -1209,6 +1348,10 @@ function buildTimeline() {
   let colorSeq = 0;
   const COLORS = ['', 'src-b', 'src-c', 'src-d', 'src-e', 'src-f'];
   sources.forEach((s) => { sourceColors[s.id] = s.kind === 'recording' ? '' : COLORS[(1 + colorSeq++) % COLORS.length]; });
+
+  // Clip height, read once (all clips share it) so attachWave never reads layout
+  // inside the loop. Clips are inset 2px top and bottom (see .timeline .clip).
+  const clipH = Math.max(1, (timeline.clientHeight || 84) - 4);
 
   // Clip track — the draggable, reorderable base layer.
   clips.forEach((c, ci) => {
@@ -1235,6 +1378,7 @@ function buildTimeline() {
       deleteClip(c.id);
     });
     timeline.appendChild(el);
+    if (src && (src.kind !== 'recording' || !isAudioDetached())) attachWave(el, src, c.start, c.end, clipH);
   });
 
   // Recorded clicks, mapped onto the edited timeline (dropped if cut out). Only
@@ -1306,6 +1450,7 @@ function buildAudioRows() {
       el.querySelector('.clip-delete').addEventListener('mousedown', (e) => e.stopPropagation());
       el.querySelector('.clip-delete').addEventListener('click', (e) => { e.stopPropagation(); deleteAudioClip(c.id); });
       row.appendChild(el);
+      attachWave(el, src, c.start, c.end, 28); // .tl-row is 32px tall, aclip inset 2px top/bottom
     });
     tlAudio.appendChild(row);
   });
@@ -1925,6 +2070,193 @@ function applyState(s) {
   audioTracks = (s.audio || []).map((t) => ({ id: t.id, clips: t.clips.map((c) => ({ ...c })) }));
 }
 
+// ---------------------------------------------------------------------------
+// Project files (.ssproj). A project bundles the full edit-state (everything in
+// snapshotState() plus zoom blocks, scene data, settings and id counters) with a
+// manifest of the media sources, so a whole timeline can be rebuilt later. The
+// media files themselves are referenced in place by the main process.
+// ---------------------------------------------------------------------------
+// Manifest entries for sources that were in an opened project but whose files
+// were missing at load. We keep them here (unrendered) so re-saving preserves
+// their references instead of silently pruning them — a temporarily-unplugged
+// drive must not permanently drop the clip's source.
+let preservedSources = [];
+
+function serializeProject() {
+  const snap = snapshotState();
+  const edit = {
+    clips: snap.clips,
+    overlays: snap.overlays,
+    audio: snap.audio,
+    blocks: blocks.map((b) => ({ ...b })),
+    sceneEvents: sceneEvents.map((e) => ({ ...e })),
+    sceneTransDur,
+    defaultScale,
+    playheadEdited,
+    seqs: { clipSeq, overlayClipSeq, overlayTrackSeq, audioClipSeq, audioTrackSeq },
+    settings: {
+      noiseProfile: noiseProfile.value,
+      echoLevel: echoLevel.value,
+      clickSound: clickSound.checked,
+      clickSoundName: clickSoundName.value,
+      clickVol: parseInt(clickVol.value, 10),
+      silenceSens: parseInt(silenceSens.value, 10),
+      silenceGap: parseFloat(silenceGap.value),
+    },
+  };
+  // The recording is rebuilt from the saved recording reference (main side), so
+  // only imported/voice-over sources travel in the manifest. `isVideo` is stored
+  // explicitly (falling back to width) so a source whose metadata briefly failed
+  // to load isn't downgraded to audio-only on the next save.
+  const live = sources
+    .filter((s) => s.kind !== 'recording')
+    .map((s) => ({ id: s.id, kind: s.kind, name: s.name, hasAudio: !!s.hasAudio,
+      isVideo: s.isVideo != null ? s.isVideo : (s.width || 0) > 0 }));
+  const liveIds = new Set(live.map((s) => s.id));
+  const preserved = preservedSources
+    .filter((s) => !liveIds.has(s.id))
+    .map((s) => ({ id: s.id, kind: s.kind, name: s.name, hasAudio: !!s.hasAudio, isVideo: !!s.isVideo, path: s.path }));
+  return { edit, sources: [...live, ...preserved] };
+}
+
+let projectSaving = false;
+async function saveProject(saveAs = false) {
+  if (projectSaving || exporting) return;
+  projectSaving = true;
+  try {
+    const res = await window.api.saveProject({ ...serializeProject(), saveAs });
+    if (res && res.canceled) return;
+    if (res && res.path) {
+      projectFileName = res.name;
+      topStatus.textContent = `حُفظ المشروع: ${res.name}`;
+    } else {
+      topStatus.textContent = 'تعذّر حفظ المشروع' + (res && res.error ? `: ${res.error}` : '');
+    }
+  } catch (err) {
+    topStatus.textContent = 'تعذّر حفظ المشروع: ' + (err.message || err);
+  } finally {
+    projectSaving = false;
+  }
+}
+
+// Debounced background auto-save — only fires after a real edit (markDirty) and
+// once the session is bound to a file. Persistence is tied to edits, not to
+// repaints, so resizing or a waveform finishing decode never writes to disk.
+let autoSaveTimer = null;
+function markDirty() {
+  if (!projectFileName) return;
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(runAutoSave, 800);
+}
+
+async function runAutoSave() {
+  autoSaveTimer = null;
+  if (!projectFileName) return;
+  try {
+    const res = await window.api.autoSaveProject(serializeProject());
+    // Surface a failed write — the user must not believe work is safe when it
+    // isn't (the Back guard trusts a bound project file).
+    if (res && res.error) topStatus.textContent = 'تعذّر الحفظ التلقائي — احفظ يدويًا';
+  } catch (_) {
+    topStatus.textContent = 'تعذّر الحفظ التلقائي — احفظ يدويًا';
+  }
+}
+
+// Write any pending auto-save immediately (before navigating away tears down the
+// renderer and drops the debounce timer). Safe to call when nothing is pending.
+async function flushAutoSave() {
+  if (autoSaveTimer == null) return;
+  clearTimeout(autoSaveTimer);
+  await runAutoSave();
+}
+
+// Rebuild the timeline from a project's edit-state after the editor has loaded.
+// The recording (if any) is already set up by init(); here we recreate the
+// imported/voice-over sources and restore every track, block and setting.
+async function applyPendingProject() {
+  let pend = null;
+  try { pend = await window.api.getPendingProject(); } catch (_) {}
+  // Remember the bound file either way, so auto-save works for opened projects.
+  try { const f = await window.api.getProjectFile(); projectFileName = f && f.name; } catch (_) {}
+  if (!pend || !pend.edit) return;
+  const { edit, sources: manifest } = pend;
+  preservedSources = [];
+
+  for (const s of (manifest || [])) {
+    if (s.id === 'rec' || sourceById(s.id)) continue;
+    // No usable URL means the file was missing at load — keep the manifest entry
+    // so a later re-save preserves the reference rather than dropping it.
+    if (!s.url) { preservedSources.push(s); continue; }
+    if (s.isVideo) {
+      const el = await createSourceEl(s.url);
+      const dur = el.videoWidth ? await resolveElDuration(el) : 0;
+      sources.push({ id: s.id, kind: s.kind, url: s.url, el, duration: dur, isVideo: true,
+        width: el.videoWidth || 0, height: el.videoHeight || 0, hasAudio: !!s.hasAudio, name: s.name });
+    } else {
+      const dur = await resolveAudioDuration(s.url);
+      sources.push({ id: s.id, kind: s.kind, url: s.url, el: null, duration: dur || 0, isVideo: false,
+        width: 0, height: 0, hasAudio: !!s.hasAudio, name: s.name });
+    }
+  }
+
+  applyState({ clips: edit.clips || [], overlays: edit.overlays || [], audio: edit.audio || [] });
+  blocks = (edit.blocks || []).map((b) => ({ ...b }));
+  if (Array.isArray(edit.sceneEvents) && edit.sceneEvents.length) sceneEvents = edit.sceneEvents.map((e) => ({ ...e }));
+  if (edit.sceneTransDur != null) sceneTransDur = edit.sceneTransDur;
+  if (edit.defaultScale != null) {
+    defaultScale = edit.defaultScale;
+    zoomLevel.value = String(defaultScale);
+    if (zoomLevelVal) zoomLevelVal.textContent = `${defaultScale.toFixed(1)}×`;
+  }
+
+  // Advance id counters past everything restored so new clips never collide.
+  // (reduce, not Math.max(...spread), so a huge restored timeline can't overflow
+  // the call stack.)
+  const sq = edit.seqs || {};
+  const nextId = (arr, base) => arr.reduce((m, x) => Math.max(m, (x.id || 0) + 1), base || 0);
+  clipSeq = nextId(clips, sq.clipSeq);
+  overlayClipSeq = nextId(overlayTracks.flatMap((t) => t.clips), sq.overlayClipSeq);
+  overlayTrackSeq = nextId(overlayTracks, sq.overlayTrackSeq);
+  audioClipSeq = nextId(audioTracks.flatMap((t) => t.clips), sq.audioClipSeq);
+  audioTrackSeq = nextId(audioTracks, sq.audioTrackSeq);
+
+  applyProjectSettings(edit.settings || {});
+
+  // Studio-only projects: size the canvas from the first video source.
+  if (!recording) {
+    const v = sources.find((s) => (s.width || 0) > 0);
+    if (v) setCanvasSize(v.width, v.height);
+  }
+
+  clipHistory = [];
+  clipFuture = [];
+  updateUndoBtn();
+  updateEmptyState();
+  updateSceneControl();
+  buildTimeline();
+  if (clips.length) seekEdited(clamp(edit.playheadEdited || 0, 0, editedDuration()));
+
+  if (pend.missing && pend.missing.length) {
+    topStatus.textContent = `فُتح المشروع — تعذّر العثور على ${pend.missing.length} ملف: ${pend.missing.join('، ')}`;
+  } else if (projectFileName) {
+    topStatus.textContent = `فُتح المشروع: ${projectFileName}`;
+  }
+}
+
+function applyProjectSettings(s) {
+  if (!s) return;
+  if (s.noiseProfile != null && !noiseProfile.disabled) noiseProfile.value = s.noiseProfile;
+  if (s.echoLevel != null && !echoLevel.disabled) echoLevel.value = s.echoLevel;
+  if (s.clickSound != null) clickSound.checked = !!s.clickSound;
+  if (s.clickSoundName != null && ['mouse', 'mouse_soft'].includes(s.clickSoundName)) {
+    clickSoundName.value = s.clickSoundName;
+    clickAudio = new Audio(`../../assets/sfx/${clickSoundName.value}.wav`);
+  }
+  if (s.clickVol != null) { clickVol.value = String(s.clickVol); clickVolVal.textContent = `${s.clickVol}%`; }
+  if (s.silenceSens != null) { silenceSens.value = String(s.silenceSens); silenceSensVal.textContent = SILENCE_SENS_LABELS[silenceSens.value] || 'متوسطة'; }
+  if (s.silenceGap != null) { silenceGap.value = String(s.silenceGap); silenceGapVal.textContent = parseFloat(silenceGap.value).toFixed(1); }
+}
+
 // Snapshot for undo, taken before every mutating edit. A fresh edit
 // invalidates the redo stack.
 function pushHistory() {
@@ -1932,6 +2264,7 @@ function pushHistory() {
   if (clipHistory.length > 100) clipHistory.shift();
   clipFuture = [];
   updateUndoBtn();
+  markDirty(); // a mutating edit is about to happen -> persist it
 }
 
 function updateUndoBtn() {
@@ -1950,6 +2283,7 @@ function restoreHistory(from, to) {
   updateUndoBtn();
   updateEmptyState();
   buildTimeline();
+  markDirty(); // undo/redo changes the document too
   if (clips.length) seekEdited(clamp(playheadEdited, 0, editedDuration()));
   else { playheadEdited = 0; movePlayhead(0); updateTimeLabel(); }
 }
@@ -2328,6 +2662,7 @@ sceneTransRange.addEventListener('input', () => {
   sceneTransDur = parseFloat(sceneTransRange.value) || 0;
   sceneTransValEd.textContent = sceneTransDur.toFixed(2);
   if (!playing) seekEdited(playheadEdited); // re-render at the current position
+  markDirty();
 });
 
 // ---------------------------------------------------------------------------
@@ -2475,10 +2810,12 @@ const SILENCE_SENS_LABELS = { 1: 'منخفضة جدًا', 2: 'منخفضة', 3: 
 silenceSens.addEventListener('input', () => {
   silenceSensVal.textContent = SILENCE_SENS_LABELS[silenceSens.value] || 'متوسطة';
   Prefs.set('silenceSens', parseInt(silenceSens.value, 10));
+  markDirty();
 });
 silenceGap.addEventListener('input', () => {
   silenceGapVal.textContent = parseFloat(silenceGap.value).toFixed(1);
   Prefs.set('silenceGap', parseFloat(silenceGap.value));
+  markDirty();
 });
 
 // Reflect the selected clip's intro transition in the picker.
@@ -2577,6 +2914,12 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
+  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    saveProject(e.shiftKey); // Ctrl+Shift+S = Save As
+    return;
+  }
+
   if (e.key === 's' || e.key === 'S') {
     e.preventDefault();
     splitAtPlayhead();
@@ -2594,6 +2937,7 @@ zoomLevel.addEventListener('input', () => {
   } else {
     defaultScale = v;
     Prefs.set('zoom', v);
+    markDirty();
   }
   drawAt(video.currentTime);
 });
@@ -2783,6 +3127,7 @@ async function runExport() {
       zoomedBuffer,
       options: {
         noiseProfile: noiseProfile.value,
+        echoLevel: echoLevel.value,
         clickSound: clickSound.checked,
         clickTimes: clickSound.checked ? editedClicks : [],
         clickSoundName: clickSoundName.value,
@@ -2829,9 +3174,15 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
     // via requestFrame(), so no empty/duplicated frames sneak into the encoder.
     const stream = canvas.captureStream(0);
     const track = stream.getVideoTracks()[0];
-    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-      ? 'video/webm;codecs=vp9'
-      : 'video/webm;codecs=vp8';
+    // Capture as VP8, NOT VP9. This intermediate is re-encoded by ffmpeg into the
+    // final file, so its codec only needs to be fast. Chromium has no GPU encoder
+    // for MediaRecorder VP9 (software-only), so at these bitrates VP9 can't encode
+    // in real time — the capture loop stalls and drops frames, which shows as a
+    // choppy/broken webcam (the static screen hides it). VP8 encodes fast enough
+    // to sustain real time, keeping motion (the cam) smooth.
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+      ? 'video/webm;codecs=vp8'
+      : 'video/webm';
     const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate });
     const parts = [];
     let finished = false;
@@ -2846,7 +3197,13 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
 
     const pushFrame = () => { if (track.requestFrame) track.requestFrame(); };
 
-    const FRAME_MS = 1000 / 60; // cap capture to 60fps regardless of monitor Hz
+    // Adaptive capture rate. The export encodes the canvas in REAL TIME via
+    // MediaRecorder (software-encoded — no GPU path). At ≤1080p most machines
+    // sustain 60fps, so keep it — full smoothness for the common case. Above
+    // 1080p (1440p/4K), real-time software encoding can't keep up at 60 and the
+    // loop drops frames, so cap to 30 there. (The webcam-seek sync fix, not this
+    // cap, is what keeps the cam smooth — 60fps was never the cam's problem.)
+    const FRAME_MS = canvas.height > 1080 ? 1000 / 30 : 1000 / 60;
     let lastFrame = -1;
 
     // Capture the clips in edit order. Between clips we seek the source video to
@@ -2888,44 +3245,63 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
           setActiveEl(nextClip.sourceId);
           video.muted = true; // element audio is never captured; keep it silent
         }
-        // Sync the recording-only webcam to the new clip when it's a recording
-        // clip; otherwise idle it (it isn't drawn over imported footage).
-        if (camReady) {
-          if (activeIsRecording()) camVideo.currentTime = Math.min(target, camVideo.duration || target);
-          else camVideo.pause();
-        }
-        // Already at the target frame (a plain split, or a fresh element at 0):
-        // keep rolling without a seek — seeking to the same spot fires no event.
-        if (!video.ended && Math.abs(video.currentTime - target) < 0.04) {
-          if (video.paused) video.play().catch(() => {});
+        // Idle the webcam over imported footage (it isn't drawn there); recording
+        // clips seek it to the new clip below, in lockstep with the screen.
+        if (camReady && !activeIsRecording()) camVideo.pause();
+        // The screen and the (separate) webcam element each jump to `target`.
+        // Figure out which actually has to MOVE: a `currentTime` write that
+        // doesn't change position fires no 'seeked', so we must only wait on the
+        // element that truly seeks — waiting on one that won't move would stall
+        // the whole cut on the safety timeout.
+        const el = video; // the element we're seeking (may have just switched)
+        const camTarget = camReady && activeIsRecording()
+          ? Math.min(target, camVideo.duration || target) : null;
+        const camMoves = camTarget != null && Math.abs(camVideo.currentTime - camTarget) > 0.04;
+        const mainMoves = Math.abs(el.currentTime - target) > 0.04;
+        // An ended element must still be rewound to `target` to resume, even if
+        // it's ~at target; that write may fire no event, so we don't wait on it.
+        const mainNeedsRewind = mainMoves || el.ended;
+
+        // Nothing moves (plain split, both already at target): keep rolling.
+        if (!mainNeedsRewind && !camMoves) {
+          if (el.paused) el.play().catch(() => {});
           lastFrame = -1;
           requestAnimationFrame(step);
           return;
         }
-        // Otherwise jump to the next clip and wait for the seek to land.
+
+        // Otherwise jump and wait for whichever element(s) genuinely seek.
         skipping = true;
         // Freeze the recorder timeline during the seek. MediaRecorder runs on
         // wall-clock, so without this the last frame would be held for the seek
         // latency — bloating the video past the (precisely-cut) audio and
         // leaving a freeze-frame at every cut.
         if (rec.state === 'recording') rec.pause();
-        const el = video; // the element we're seeking (may have just switched)
+        // Register listeners BEFORE moving currentTime so a fast seek can't fire
+        // before we're listening. Only count seeks that will actually emit.
+        let pending = (mainMoves ? 1 : 0) + (camMoves ? 1 : 0);
         let settled = false;
-        const onSeeked = () => {
+        const finishSeek = () => {
           if (settled) return;
           settled = true;
-          el.removeEventListener('seeked', onSeeked);
+          if (mainMoves) el.removeEventListener('seeked', onMainSeeked);
+          if (camMoves) camVideo.removeEventListener('seeked', onCamSeeked);
           skipping = false;
           lastFrame = -1;
-          // Resume: a fresh/just-switched element is paused, and one seeked away
-          // from the true media end paused itself on 'ended'.
           if (el === video && el.paused) el.play().catch(() => {});
           if (rec.state === 'paused') rec.resume();
           requestAnimationFrame(step);
         };
-        el.addEventListener('seeked', onSeeked);
-        el.currentTime = target;
-        setTimeout(onSeeked, 1500); // safety if 'seeked' is missed
+        const dec = () => { if (--pending <= 0) finishSeek(); };
+        const onMainSeeked = () => dec();
+        const onCamSeeked = () => dec();
+        if (mainMoves) el.addEventListener('seeked', onMainSeeked);
+        if (camMoves) camVideo.addEventListener('seeked', onCamSeeked);
+        if (mainNeedsRewind) el.currentTime = target;
+        if (camMoves) camVideo.currentTime = camTarget;
+        // If no 'seeked' is expected (ended element already at target, no cam
+        // move), resume next tick instead of waiting out the safety timeout.
+        setTimeout(finishSeek, pending === 0 ? 0 : 2000);
         return;
       }
 
@@ -2987,10 +3363,32 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
 }
 
 exportBtn.addEventListener('click', runExport);
-backBtn.addEventListener('click', () => {
+
+const saveProjectBtn = document.getElementById('saveProjectBtn');
+const openProjectBtn = document.getElementById('openProjectBtn');
+saveProjectBtn.addEventListener('click', () => saveProject(false));
+openProjectBtn.addEventListener('click', async () => {
+  if (exporting) return;
+  topStatus.textContent = 'جارٍ فتح المشروع…';
+  try {
+    await flushAutoSave(); // don't lose pending edits of the current project
+    const res = await window.api.openProject();
+    if (res && res.canceled) { topStatus.textContent = ''; return; }
+    if (res && res.error) { topStatus.textContent = res.error; return; }
+    // On success the main process reloads the editor with the project's state;
+    // if any media was missing it's reported after the reload via the manifest.
+  } catch (err) {
+    topStatus.textContent = 'تعذّر فتح المشروع: ' + (err.message || err);
+  }
+});
+
+backBtn.addEventListener('click', async () => {
   // Guard against discarding an import-only studio session on a stray click.
+  // A saved (auto-saving) project is safe to leave — but flush any pending
+  // auto-save first, since leaving tears down the renderer and its debounce.
   const hasImports = sources.some((s) => s.kind === 'import');
-  if (hasImports && !confirm('العودة إلى شاشة التسجيل ستترك المونتاج الحالي. متابعة؟')) return;
+  if (hasImports && !projectFileName && !confirm('العودة إلى شاشة التسجيل ستترك المونتاج الحالي. متابعة؟')) return;
+  await flushAutoSave();
   window.api.backHome();
 });
 

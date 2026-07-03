@@ -47,6 +47,46 @@ function arnndn() {
 // between speech without hard-cutting word tails. range=0.06 caps attenuation.
 const GATE = 'agate=threshold=0.012:range=0.06:ratio=2:attack=5:release=250';
 
+// Echo / room-reverb reduction, in three strengths. ffmpeg has no ML dereverb,
+// but a downward expander (agate) clamps the low-level reverb tail that lingers
+// after speech and in the gaps between words; stronger levels lower the
+// threshold (catch more of the tail), attenuate deeper (smaller `range`), close
+// faster (shorter `release`), and add a light spectral pass for diffuse late
+// reflections. It dries a roomy recording — it can't fully remove reverb that
+// overlaps continuous speech. Appended AFTER the noise chain so denoise runs first.
+// Tuned against a loudness-normalised signal (~-16 LUFS, so speech RMS ~0.1),
+// which is why every chain that uses these runs loudnorm FIRST — a fixed
+// threshold is only meaningful once the level is predictable. Higher level =
+// more aggressive: a higher threshold clamps more of the tail, a smaller `range`
+// attenuates it deeper, a shorter release closes faster, and `strong` adds a
+// spectral pass for diffuse reflections.
+const ECHO_CHAINS = {
+  off: null,
+  light: 'agate=threshold=0.03:range=0.4:ratio=2:attack=10:release=200',
+  medium: 'agate=threshold=0.05:range=0.15:ratio=2.5:attack=8:release=130',
+  strong: 'agate=threshold=0.08:range=0.06:ratio=4:attack=5:release=90,afftdn=nr=12:nf=-30',
+};
+
+// The mic-cleanup filter for a given noise profile + echo level. Either can be
+// 'off'; returns null when both are off (raw audio). The echo gate always runs
+// on a level-normalised signal so its threshold behaves the same on any mic.
+function voiceChainFor(noiseProfile, echoLevel) {
+  const base = chains()[noiseProfile] || null;
+  let echo = ECHO_CHAINS[echoLevel] || null;
+  if (!echo) return base;
+  // The medium/strong denoise chains already run spectral denoise (afftdn/anlmdn)
+  // AND end with a gate, so stacking the strong echo's extra afftdn on top thins
+  // and pumps the voice. Drop the redundant spectral pass there — the expander
+  // alone still dries the reverb tail.
+  if (echoLevel === 'strong' && (noiseProfile === 'medium' || noiseProfile === 'strong')) {
+    echo = 'agate=threshold=0.08:range=0.06:ratio=4:attack=5:release=90';
+  }
+  // The denoise chains already end normalised (loudnorm), so append directly.
+  if (base) return `${base},${echo}`;
+  // Echo-only: normalise first so the gate threshold lines up with speech level.
+  return `highpass=f=100,loudnorm=I=-16:TP=-1.5:LRA=11,${echo}`;
+}
+
 function chains() {
   const rn = arnndn();
   return {
@@ -228,6 +268,7 @@ async function exportVideo({
   sources = {},
   recordingSourceId = null,
   noiseProfile,
+  echoLevel = 'off',
   clickSound,
   clickTimes = [],
   clickSoundName = 'mouse',
@@ -297,7 +338,7 @@ async function exportVideo({
 
   const clicks = clickSound && clickTimes.length ? clickTimes.slice(0, MAX_CLICKS) : [];
   const useClicks = clicks.length > 0;
-  const noiseChain = chains()[noiseProfile];
+  const noiseChain = voiceChainFor(noiseProfile, echoLevel);
 
   // Inputs: input 0 is always the rendered video; audio sources and the click
   // sfx are appended as we discover we need them.
@@ -425,8 +466,8 @@ async function exportVideo({
  * Render just the cleaned mic audio (same chain as export) to a file, so the
  * editor can preview the noise-reduced sound before exporting.
  */
-async function exportCleanAudio({ inputPath, noiseProfile, outputPath, onProgress }) {
-  const chain = chains()[noiseProfile];
+async function exportCleanAudio({ inputPath, noiseProfile, echoLevel = 'off', outputPath, onProgress }) {
+  const chain = voiceChainFor(noiseProfile, echoLevel);
   const args = ['-y', '-i', inputPath, '-vn', '-map', '0:a:0'];
   if (chain) args.push('-af', chain);
   args.push('-c:a', 'aac', '-b:a', '192k', outputPath);

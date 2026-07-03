@@ -48,7 +48,14 @@ contextBridge.exposeInMainWorld('api', {
 
   // editor
   getProject: () => ipcRenderer.invoke('project:get'),
-  previewAudio: (profile) => ipcRenderer.invoke('audio:preview', profile),
+  previewAudio: (opts) => ipcRenderer.invoke('audio:preview', opts),
+
+  // project files (.ssproj): save / auto-save / open / restore edit-state
+  saveProject: (payload) => ipcRenderer.invoke('project:save', payload),
+  autoSaveProject: (payload) => ipcRenderer.invoke('project:autosave', payload),
+  openProject: () => ipcRenderer.invoke('project:open'),
+  getPendingProject: () => ipcRenderer.invoke('project:pending'),
+  getProjectFile: () => ipcRenderer.invoke('project:file'),
 
   // export
   runExport: (payload) => ipcRenderer.invoke('export:run', payload),
@@ -68,6 +75,13 @@ contextBridge.exposeInMainWorld('api', {
     const handler = () => cb();
     ipcRenderer.on('shortcut:toggle-record', handler);
     return () => ipcRenderer.removeListener('shortcut:toggle-record', handler);
+  },
+
+  // window focus changes (used to pause live previews in the background)
+  onWindowFocus: (cb) => {
+    const handler = (_e, focused) => cb(focused);
+    ipcRenderer.on('window:focus', handler);
+    return () => ipcRenderer.removeListener('window:focus', handler);
   },
 
   // misc
