@@ -515,8 +515,21 @@ function updateOverlayPlayback(te) {
   overlayEls.forEach((el) => { if (!active.has(el) && !el.paused) el.pause(); });
 }
 
+// Any source feeding the main timeline that carries an audio track? Governs
+// whether the auto-remove-silence controls are useful (works for a recording's
+// mic OR any imported clip's audio).
+function timelineHasAudio() {
+  return clips.some((c) => { const s = sourceById(c.sourceId); return !!(s && s.hasAudio); });
+}
+
+// Show the remove-silence controls whenever the timeline has any audio to cut.
+function updateSilenceAvailability() {
+  silenceGroup.style.display = timelineHasAudio() ? '' : 'none';
+}
+
 // Toggle the "import to begin" overlay + export availability for an empty studio.
 function updateEmptyState() {
+  updateSilenceAvailability();
   const empty = clips.length === 0;
   const stage = document.querySelector('.editor-stage');
   let ph = document.getElementById('stagePlaceholder');
@@ -554,12 +567,12 @@ function setupPanels() {
 function applyEditorPrefs() {
   if (!noiseProfile.disabled) noiseProfile.value = Prefs.get('noiseProfile', noiseProfile.value);
 
-  // Auto remove-silence: only meaningful for a recording with mic audio.
+  // Auto remove-silence: applies to any audio-bearing clip (recorded or imported).
   silenceSens.value = String(Prefs.get('silenceSens', 3));
   silenceSensVal.textContent = SILENCE_SENS_LABELS[silenceSens.value] || 'متوسطة';
   silenceGap.value = String(Prefs.get('silenceGap', 0.4));
   silenceGapVal.textContent = parseFloat(silenceGap.value).toFixed(1);
-  silenceGroup.style.display = (recording && recording.hasAudio) ? '' : 'none';
+  updateSilenceAvailability();
 
   zoomLevel.value = Prefs.get('zoom', 2.0);
   defaultScale = parseFloat(zoomLevel.value);
@@ -685,9 +698,32 @@ function resolveDuration() {
   });
 }
 
+// The webcam is a SEPARATE MediaRecorder stream: it spans the same real interval
+// as the screen recording but usually a slightly different FILE duration (each
+// stream is independently variable-frame-rate). Mapping a recording source time
+// straight onto the cam (camVideo.currentTime = screenTime) therefore lands at the
+// wrong real moment, and the error grows with time. That reads as a slow drift on
+// an uncut clip, but remove-silence's many hard cuts re-expose it as a visible
+// jump at every seam — the face stops matching the voice. Scale by the duration
+// ratio so the cam tracks the screen's real time. Ratio is 1 (a no-op) when the
+// durations match or the cam duration isn't known yet.
+function camDurRatio() {
+  const rec = recording ? sourceById(recording.id) : null;
+  const recDur = rec && rec.duration ? rec.duration : 0;
+  const camDur = camVideo.duration;
+  if (recDur > 0 && isFinite(camDur) && camDur > 0) return camDur / recDur;
+  return 1;
+}
+// Recording source time -> cam file time, clamped to the cam's duration.
+function camTimeFor(srcT) {
+  const t = srcT * camDurRatio();
+  const camDur = camVideo.duration;
+  return isFinite(camDur) && camDur > 0 ? Math.min(t, camDur) : t;
+}
+
 function seekTo(t) {
   return new Promise((resolve) => {
-    if (camReady) camVideo.currentTime = Math.min(t, camVideo.duration || t);
+    if (camReady) camVideo.currentTime = camTimeFor(t);
     if (cleanAudioActive) cleanAudio.currentTime = Math.min(t, cleanAudio.duration || t);
     // If we're already at the target, no 'seeked' event fires — resolve now.
     if (Math.abs(video.currentTime - t) < 0.02) { resolve(); return; }
@@ -1050,10 +1086,10 @@ function gotoClipMedia(idx) {
   const sp = c.speed || 1;
   video.playbackRate = sp;
   const isRec = activeIsRecording();
-  if (isRec && camReady) camVideo.playbackRate = sp;
+  if (isRec && camReady) camVideo.playbackRate = sp * camDurRatio();
   if (isRec && cleanAudioActive) cleanAudio.playbackRate = sp;
   if (camReady) {
-    if (isRec) camVideo.currentTime = Math.min(c.start, camVideo.duration || c.start);
+    if (isRec) camVideo.currentTime = camTimeFor(c.start);
     else camVideo.pause();
   }
   if (cleanAudioActive) {
@@ -1138,7 +1174,7 @@ function renderLoop() {
   // Keep the recording-only aux tracks (webcam, cleaned mic) in step with
   // playback, and idle them while an imported clip is on screen.
   if (activeIsRecording()) {
-    if (camReady) camVideo.playbackRate = sp;
+    if (camReady) camVideo.playbackRate = sp * camDurRatio();
     if (cleanAudioActive) cleanAudio.playbackRate = sp;
     playClickSounds(video.currentTime);
     if (camReady && camVideo.paused) camVideo.play().catch(() => {});
@@ -1258,23 +1294,15 @@ function relayoutTimeline() {
 // ---------------------------------------------------------------------------
 const PEAKS_PER_SEC = 120;
 const waveformCache = new Map(); // sourceId -> {peaks:Float32Array} | 'pending' | 'none'
-let waveAudioCtx = null;
 
 async function ensureWaveform(src) {
   if (!src || !src.hasAudio || !src.url) return;
   if (waveformCache.has(src.id)) return;
   waveformCache.set(src.id, 'pending');
   try {
-    // The recording is already decoded (and cached) for remove-silence; reuse it
-    // rather than fetching/decoding the whole file a second time.
-    let audio;
-    if (src.kind === 'recording') {
-      audio = await getRecordingAudioBuffer();
-    } else {
-      waveAudioCtx = waveAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
-      const bytes = await fetch(src.url).then((r) => r.arrayBuffer());
-      audio = await waveAudioCtx.decodeAudioData(bytes);
-    }
+    // Reuse the same decoded buffer remove-silence uses (cached per source), so a
+    // large file is fetched/decoded at most once for both the wave and the cuts.
+    const audio = await getSourceAudioBuffer(src);
     if (!audio) { waveformCache.set(src.id, 'none'); return; }
     const totalPeaks = Math.max(1, Math.ceil(audio.duration * PEAKS_PER_SEC));
     const peaks = new Float32Array(totalPeaks);
@@ -1521,7 +1549,7 @@ function seekEdited(te) {
   const sp = m.clip.speed || 1;
   video.playbackRate = sp;
   const isRec = activeIsRecording();
-  if (isRec && camReady) { camVideo.playbackRate = sp; camVideo.currentTime = Math.min(m.src, camVideo.duration || m.src); }
+  if (isRec && camReady) { camVideo.playbackRate = sp * camDurRatio(); camVideo.currentTime = camTimeFor(m.src); }
   if (isRec && cleanAudioActive) { cleanAudio.playbackRate = sp; cleanAudio.currentTime = Math.min(m.src, cleanAudio.duration || m.src); }
   video.currentTime = m.src;
   lastFxTime = m.src;
@@ -2682,9 +2710,38 @@ async function getRecordingAudioBuffer() {
   return recAudioBuffer;
 }
 
-// Speech spans [ [start,end], ... ] in source seconds. Windows below an
-// amplitude threshold are "silence"; only silence gaps ≥ minSilence are cut, and
-// each kept span is padded so cuts don't clip word starts/ends.
+// Decoded full-resolution audio for ANY source (recording or import), cached by
+// source id so a large file is fetched/decoded at most once. The recording reuses
+// its own dedicated cache above. Used by remove-silence to analyse each source.
+const importAudioBuffers = new Map(); // sourceId -> AudioBuffer
+const importAudioFailed = new Set();  // sources that failed to decode (skip retry)
+let silenceAudioCtx = null;
+async function getSourceAudioBuffer(src) {
+  if (!src || !src.hasAudio || !src.url) return null;
+  if (src.kind === 'recording') return getRecordingAudioBuffer();
+  if (importAudioBuffers.has(src.id)) return importAudioBuffers.get(src.id);
+  if (importAudioFailed.has(src.id)) return null;
+  const arr = await (await fetch(src.url)).arrayBuffer();
+  const AC = window.AudioContext || window.webkitAudioContext;
+  silenceAudioCtx = silenceAudioCtx || new AC();
+  let buf;
+  try { buf = await silenceAudioCtx.decodeAudioData(arr); }
+  catch (err) { importAudioFailed.add(src.id); throw err; }
+  importAudioBuffers.set(src.id, buf);
+  return buf;
+}
+
+// Speech spans [ [start,end], ... ] in source seconds. Windows below an energy
+// threshold are "silence"; only silence gaps ≥ minSilence are cut, and each kept
+// span is padded so cuts don't clip word starts/ends.
+//
+// The threshold is derived from the DISTRIBUTION of frame energies (a robust
+// noise-floor → speech-level span), not the single loudest frame. A peak-relative
+// threshold is fooled by one loud transient — a cough, mouse click, plosive,
+// keyboard clack — which inflates the peak and pushes the threshold above normal
+// speech, so quiet tails and soft consonants get cut as "silence". Percentiles
+// ignore that outlier. A second, lower "stay in speech" threshold (hysteresis)
+// keeps word onsets/tails and brief mid-word dips from being chopped.
 function detectSpeechRanges(buf, thresholdRatio, minSilence, pad) {
   const sr = buf.sampleRate;
   const a = buf.getChannelData(0);
@@ -2692,22 +2749,44 @@ function detectSpeechRanges(buf, thresholdRatio, minSilence, pad) {
   const n = a.length;
   const win = Math.max(1, Math.round(sr * 0.02)); // 20 ms
   const nWin = Math.ceil(n / win);
+  if (!nWin) return [];
   const rms = new Float32Array(nWin);
-  let peak = 0;
   for (let w = 0; w < nWin; w++) {
     const s = w * win, e = Math.min(n, s + win);
     let sum = 0;
     for (let i = s; i < e; i++) { const v = b ? (a[i] + b[i]) * 0.5 : a[i]; sum += v * v; }
-    const r = Math.sqrt(sum / Math.max(1, e - s));
-    rms[w] = r; if (r > peak) peak = r;
+    rms[w] = Math.sqrt(sum / Math.max(1, e - s));
   }
-  const thresh = Math.max(peak * thresholdRatio, 0.004);
+
+  // Robust reference levels from the sorted frame energies.
+  const sorted = Float32Array.from(rms).sort();
+  const pct = (p) => sorted[Math.min(nWin - 1, Math.max(0, Math.round(p * (nWin - 1))))];
+  const noise = pct(0.15);      // room tone / silence floor
+  const speechLvl = pct(0.90);  // typical speech energy
+  const span = Math.max(speechLvl - noise, 1e-5);
+
+  // thresholdRatio (0.02..0.15 from the sensitivity slider) sets how far up the
+  // noise→speech span the ENTER threshold sits: higher = more aggressive = cuts
+  // more. The STAY threshold sits lower (hysteresis) so tails aren't clipped.
+  const frac = Math.min(0.6, 0.15 + thresholdRatio * 2.5); // ~0.20..0.53
+  const hi = Math.max(noise + span * frac, noise * 1.8, 0.003);
+  const lo = Math.max(noise + span * frac * 0.5, noise * 1.3);
+
   const winDur = win / sr;
+  // Hysteresis scan: open a span when energy crosses `hi`, keep it open until
+  // energy falls below the lower `lo`, so quiet tails/onsets and brief dips
+  // inside a word stay part of the speech span.
   const raw = [];
-  for (let i = 0; i < nWin;) {
-    if (rms[i] >= thresh) { let j = i; while (j < nWin && rms[j] >= thresh) j++; raw.push([i * winDur, j * winDur]); i = j; }
-    else i++;
+  let inSpeech = false, spanStart = 0;
+  for (let i = 0; i < nWin; i++) {
+    if (!inSpeech) {
+      if (rms[i] >= hi) { inSpeech = true; spanStart = i; }
+    } else if (rms[i] < lo) {
+      raw.push([spanStart * winDur, i * winDur]);
+      inSpeech = false;
+    }
   }
+  if (inSpeech) raw.push([spanStart * winDur, nWin * winDur]);
   if (!raw.length) return [];
   const merged = [];
   let [cs, ce] = raw[0];
@@ -2729,48 +2808,68 @@ function detectSpeechRanges(buf, thresholdRatio, minSilence, pad) {
 const SILENCE_RATIOS = { 1: 0.02, 2: 0.04, 3: 0.06, 4: 0.10, 5: 0.15 };
 
 async function removeSilences() {
-  if (exporting || !recording || !recording.hasAudio) return;
-  // With audio detached, cutting only the video would desync the audio clip.
-  if (isAudioDetached()) { silenceStatus.textContent = 'أعد ربط الصوت أولًا (🔗)'; return; }
+  if (exporting) return;
+  // Every source on the main track that carries audio — recorded or imported.
+  const audioSrcIds = [...new Set(clips.map((c) => c.sourceId))]
+    .filter((id) => { const s = sourceById(id); return !!(s && s.hasAudio); });
+  if (!audioSrcIds.length) { silenceStatus.textContent = 'لا يوجد صوت للتحليل'; return; }
+  // With the recording's audio detached, cutting its (muted) video clips would
+  // desync the separate audio-track clip. Only block when the recording is one
+  // of the sources being cut — imports have no detach concept.
+  const recInvolved = audioSrcIds.some((id) => { const s = sourceById(id); return s && s.kind === 'recording'; });
+  if (recInvolved && isAudioDetached()) { silenceStatus.textContent = 'أعد ربط صوت التسجيل أولًا (🔗)'; return; }
+
   removeSilenceBtn.disabled = true;
   silenceStatus.textContent = 'جارٍ التحليل…';
-  let buf;
-  try { buf = await getRecordingAudioBuffer(); }
-  catch (_) { silenceStatus.textContent = 'تعذّر تحليل الصوت'; removeSilenceBtn.disabled = false; return; }
-  removeSilenceBtn.disabled = false;
-  if (!buf) { silenceStatus.textContent = 'لا يوجد صوت للتحليل'; return; }
-
   const ratio = SILENCE_RATIOS[parseInt(silenceSens.value, 10)] || 0.06;
   const minSilence = parseFloat(silenceGap.value) || 0.4;
-  const speech = detectSpeechRanges(buf, ratio, minSilence, 0.12);
-  if (!speech.length) { silenceStatus.textContent = 'لم يُعثر على كلام'; return; }
+
+  // Decode + detect speech spans once per source (each in its own source-time frame).
+  const speechBySource = new Map(); // sourceId -> [[start,end], ...]
+  let decodedAny = false;
+  for (const id of audioSrcIds) {
+    let ranges = null;
+    try {
+      const buf = await getSourceAudioBuffer(sourceById(id));
+      if (buf) { decodedAny = true; ranges = detectSpeechRanges(buf, ratio, minSilence, 0.12); }
+    } catch (_) { ranges = null; }
+    if (ranges) speechBySource.set(id, ranges);
+  }
+  removeSilenceBtn.disabled = false;
+  if (!decodedAny) { silenceStatus.textContent = 'تعذّر تحليل الصوت'; return; }
+  // No source had any speech above the threshold: don't wipe the footage, warn.
+  if (![...speechBySource.values()].some((r) => r.length)) {
+    silenceStatus.textContent = 'لم يُعثر على كلام'; return;
+  }
 
   if (playing) pause(); // don't let the render loop index a stale clip mid-rebuild
 
-  // Keep only speech sub-ranges of recording clips; leave imports/other tracks.
+  // Keep only speech sub-ranges of audio-bearing clips; leave silent clips and
+  // any clip whose source failed to decode untouched.
   const before = editedDuration();
   const newClips = [];
-  let recClipsIn = 0;
-  let recClipsKept = 0;
+  let cutIn = 0;    // clips we analysed (source had detected speech)
+  let cutKept = 0;  // resulting kept sub-clips
   for (const c of clips) {
-    const src = sourceById(c.sourceId);
-    if (src && src.kind === 'recording') {
-      recClipsIn++;
-      let first = true;
-      for (const [s, e] of speech) {
-        const a2 = Math.max(s, c.start), b2 = Math.min(e, c.end);
-        if (b2 - a2 > 0.05) {
-          const nc = { id: clipSeq++, sourceId: c.sourceId, start: a2, end: b2, speed: c.speed || 1 };
-          if (first && c.transition) nc.transition = { ...c.transition }; // keep the clip's intro transition
-          newClips.push(nc);
-          recClipsKept++;
-          first = false;
-        }
+    const speech = speechBySource.get(c.sourceId);
+    // No entry, or a source with zero detected speech -> keep the clip untouched
+    // (never delete a whole clip just because it has no speech at all).
+    if (!speech || !speech.length) { newClips.push({ ...c }); continue; }
+    cutIn++;
+    let first = true;
+    for (const [s, e] of speech) {
+      const a2 = Math.max(s, c.start), b2 = Math.min(e, c.end);
+      if (b2 - a2 > 0.05) {
+        const nc = { ...c, id: clipSeq++, start: a2, end: b2 };
+        if (!first) delete nc.transition; // intro transition only on the first kept piece
+        newClips.push(nc);
+        cutKept++;
+        first = false;
       }
-    } else newClips.push({ ...c });
+    }
   }
-  // Don't silently wipe the footage if detection removed every recording clip.
-  if (recClipsIn > 0 && recClipsKept === 0) { silenceStatus.textContent = 'الحساسية عالية جدًا — لم يبقَ شيء'; return; }
+  // Don't silently wipe footage if detection removed every audio clip.
+  if (cutIn > 0 && cutKept === 0) { silenceStatus.textContent = 'الحساسية عالية جدًا — لم يبقَ شيء'; return; }
   if (!newClips.length) { silenceStatus.textContent = 'لا شيء لإبقائه'; return; }
 
   pushHistory();
@@ -3254,8 +3353,7 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
         // element that truly seeks — waiting on one that won't move would stall
         // the whole cut on the safety timeout.
         const el = video; // the element we're seeking (may have just switched)
-        const camTarget = camReady && activeIsRecording()
-          ? Math.min(target, camVideo.duration || target) : null;
+        const camTarget = camReady && activeIsRecording() ? camTimeFor(target) : null;
         const camMoves = camTarget != null && Math.abs(camVideo.currentTime - camTarget) > 0.04;
         const mainMoves = Math.abs(el.currentTime - target) > 0.04;
         // An ended element must still be rewound to `target` to resume, even if
@@ -3307,7 +3405,7 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
 
       // Keep the webcam advancing during recording clips, idle during imports.
       if (camReady) {
-        if (activeIsRecording()) { camVideo.playbackRate = segSp; if (camVideo.paused) camVideo.play().catch(() => {}); }
+        if (activeIsRecording()) { camVideo.playbackRate = segSp * camDurRatio(); if (camVideo.paused) camVideo.play().catch(() => {}); }
         else if (!camVideo.paused) camVideo.pause();
       }
 
@@ -3343,7 +3441,7 @@ function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
 
     video.pause();
     video.muted = true;
-    if (camReady && activeIsRecording()) camVideo.currentTime = startAt;
+    if (camReady && activeIsRecording()) camVideo.currentTime = camTimeFor(startAt);
     // Seek to the first clip; if we're already there, start immediately.
     if (Math.abs(video.currentTime - startAt) < 0.05) {
       begin();
