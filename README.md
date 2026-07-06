@@ -141,24 +141,80 @@ Your exported MP4/MOV/WebM/GIF is written wherever you choose in the save dialog
 
 ---
 
-## Building a distributable
+## Installers — build & install per OS
 
-Builds are produced with `electron-builder`. **Build on the target OS** (you can't sign a
-macOS app from Windows, and vice-versa).
+Installers are produced with `electron-builder`. Each build script writes its output to
+`dist/`. **You must build on the target OS** — electron-builder does not cross-compile
+reliably (macOS apps can't be signed from Windows, and the Linux `.deb`/AppImage packaging
+tools aren't available on Windows/macOS). Build each platform on that platform (or in CI
+with a runner per OS).
 
+| OS | Build command | Produces (in `dist/`) |
+|---|---|---|
+| Windows | `npm run dist:win` | `Mashhad-<version>-<arch>.exe` (NSIS installer) |
+| macOS | `npm run dist:mac` | `Mashhad-<version>-<arch>.dmg` **and** `.zip` |
+| Linux | `npm run dist:linux` | `Mashhad-<version>-<arch>.AppImage` **and** `.deb` |
+
+`npm run dist` (no suffix) builds the default target for whatever OS you're currently on.
+
+> First time on a machine? Run `npm install` before any `dist:*` command so
+> electron-builder and the native deps (`ffmpeg-static`, `uiohook-napi`) are present.
+
+> **Windows build gotcha — "Cannot create symbolic link … a required privilege is not
+> held by the client".** electron-builder unpacks its `winCodeSign` helper, which contains
+> macOS symlinks, and a standard (non-admin) Windows account can't create symlinks. Fix it
+> once with **either** of: enable **Settings → Privacy & Security → For developers →
+> Developer Mode**, **or** run the build from an **Administrator** terminal. (Those macOS
+> files aren't needed for a Windows build — only the `rcedit`/signing tools in that package
+> are.)
+
+### Windows — install
+
+1. Double-click **`Mashhad-<version>-x64.exe`**.
+2. Because the installer isn't code-signed, Windows SmartScreen may show a blue
+   *"Windows protected your PC"* dialog → click **More info → Run anyway**.
+3. The NSIS installer lets you choose the install folder and creates Start-menu / desktop
+   shortcuts. Launch **مشهد (Mashhad)** from the Start menu.
+
+_No extra permissions needed on Windows._
+
+### macOS — install
+
+1. Open **`Mashhad-<version>-<arch>.dmg`** and drag **Mashhad** into **Applications**.
+2. First launch: because the app isn't notarized, macOS Gatekeeper blocks it. Either
+   **right-click the app → Open → Open**, or go to **System Settings → Privacy & Security**
+   and click **Open Anyway**.
+3. Grant the capture permissions (see the [Permissions](#permissions-important--the-app-needs-them-to-capture)
+   section): **Screen Recording**, **Accessibility**, **Input Monitoring**, and optionally
+   **Microphone** / **Camera**. **Quit and relaunch** after granting Screen Recording and
+   Accessibility — macOS only applies them to a fresh launch.
+
+- **Apple Silicon vs Intel:** build on the Mac you're targeting, or pass
+  `--arm64` / `--x64` (or `--universal`) to produce the matching `.dmg`.
+- **Distributing to other Macs** needs signing + notarization: set `CSC_LINK` /
+  `CSC_KEY_PASSWORD` to your Apple Developer cert and add a notarization step. For your
+  *own* Mac you can skip this and just approve Gatekeeper manually as above.
+
+### Linux — install
+
+Two artifacts are produced; pick whichever suits the target distro:
+
+**AppImage (works on most distros, no install needed):**
 ```bash
-npm run dist:mac   # → .dmg + .zip under dist/
-npm run dist:win   # → NSIS installer under dist/
-npm run dist       # → default target for the current OS
+chmod +x Mashhad-<version>-x86_64.AppImage
+./Mashhad-<version>-x86_64.AppImage
 ```
 
-To install a macOS build: open the `.dmg`, drag **Smooth Screen Recorder** to Applications,
-launch it, then grant the permissions above.
+**Debian / Ubuntu (`.deb`):**
+```bash
+sudo apt install ./Mashhad-<version>-amd64.deb   # resolves dependencies
+# or:  sudo dpkg -i Mashhad-<version>-amd64.deb && sudo apt -f install
+```
+Then launch **Mashhad** from your applications menu (or run `Mashhad` in a terminal).
 
-**Signing & notarization** (only needed to distribute to *other* machines): on macOS set
-`CSC_LINK` / `CSC_KEY_PASSWORD` with your Apple Developer cert and add a notarization step.
-For running on your *own* Mac you can skip notarization and just approve Gatekeeper + the
-privacy prompts manually.
+> **Linux note:** the global cursor hook (`uiohook-napi`) that powers the smooth zoom needs
+> an **X11** session — cursor tracking may not work under Wayland. Screen recording itself
+> still works either way.
 
 ---
 
