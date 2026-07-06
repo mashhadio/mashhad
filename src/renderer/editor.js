@@ -2741,7 +2741,10 @@ async function getSourceAudioBuffer(src) {
 // keyboard clack — which inflates the peak and pushes the threshold above normal
 // speech, so quiet tails and soft consonants get cut as "silence". Percentiles
 // ignore that outlier. A second, lower "stay in speech" threshold (hysteresis)
-// keeps word onsets/tails and brief mid-word dips from being chopped.
+// keeps word onsets/tails and brief mid-word dips from being chopped. Isolated
+// sub-100 ms blips are dropped as noise (so the gap around them is cut), and each
+// kept span gets a larger trailing than leading pad so a word's quiet release
+// isn't clipped.
 function detectSpeechRanges(buf, thresholdRatio, minSilence, pad) {
   const sr = buf.sampleRate;
   const a = buf.getChannelData(0);
@@ -2770,7 +2773,7 @@ function detectSpeechRanges(buf, thresholdRatio, minSilence, pad) {
   // more. The STAY threshold sits lower (hysteresis) so tails aren't clipped.
   const frac = Math.min(0.6, 0.15 + thresholdRatio * 2.5); // ~0.20..0.53
   const hi = Math.max(noise + span * frac, noise * 1.8, 0.003);
-  const lo = Math.max(noise + span * frac * 0.5, noise * 1.3);
+  const lo = Math.max(noise + span * frac * 0.4, noise * 1.2); // lower = holds quiet tails
 
   const winDur = win / sr;
   // Hysteresis scan: open a span when energy crosses `hi`, keep it open until
@@ -2795,10 +2798,27 @@ function detectSpeechRanges(buf, thresholdRatio, minSilence, pad) {
     if (s - ce < minSilence) ce = e; else { merged.push([cs, ce]); [cs, ce] = [s, e]; }
   }
   merged.push([cs, ce]);
+
+  // Drop isolated blips shorter than MIN_SPEECH: a sub-100 ms island surrounded by
+  // silence is a click/tap/lip-smack, not speech, so treating it as noise lets the
+  // gap around it actually be cut. Spans within minSilence of real speech were
+  // already bridged into it by the merge above, so genuine short words survive.
+  const MIN_SPEECH = 0.10;
+  const speechy = merged.filter(([s, e]) => e - s >= MIN_SPEECH);
+  if (!speechy.length) return [];
+
+  // Pad each kept span before cutting. Asymmetric on purpose: a larger TRAILING
+  // hangover than leading pad, because a word's quiet decay falls below the
+  // threshold before the sound is really over, so a symmetric pad clips the last
+  // word. Extra tail padding covers that release. Both are capped against
+  // minSilence so lead+tail can't exceed the gap being cut (which would overlap
+  // the two padded spans and leave the silence uncut) at aggressive slider values.
   const dur = buf.duration;
+  const leadPad = Math.min(pad, minSilence * 0.35);
+  const tailPad = Math.min(pad + 0.13, minSilence * 0.5);
   const out = [];
-  for (const [s, e] of merged) {
-    const ps = Math.max(0, s - pad), pe = Math.min(dur, e + pad);
+  for (const [s, e] of speechy) {
+    const ps = Math.max(0, s - leadPad), pe = Math.min(dur, e + tailPad);
     if (out.length && ps <= out[out.length - 1][1]) out[out.length - 1][1] = Math.max(out[out.length - 1][1], pe);
     else out.push([ps, pe]);
   }
