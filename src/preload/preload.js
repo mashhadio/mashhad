@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('api', {
   startRecording: (payload) => ipcRenderer.invoke('rec:start', payload),
   sendVideoChunk: (buf) => ipcRenderer.invoke('rec:videoChunk', buf),
   sendCamChunk: (buf) => ipcRenderer.invoke('rec:camChunk', buf),
+  dropCam: () => ipcRenderer.invoke('rec:dropCam'),
   finishRecording: (payload) => ipcRenderer.invoke('rec:finish', payload),
   abortRecording: () => ipcRenderer.invoke('rec:abort'),
 
@@ -58,6 +59,10 @@ contextBridge.exposeInMainWorld('api', {
   getProjectFile: () => ipcRenderer.invoke('project:file'),
 
   // export
+  beginExportCapture: () => ipcRenderer.invoke('export:beginCapture'),
+  sendExportChunk: (buf) => ipcRenderer.invoke('export:chunk', buf),
+  endExportCapture: () => ipcRenderer.invoke('export:endCapture'),
+  abortExportCapture: () => ipcRenderer.invoke('export:abortCapture'),
   runExport: (payload) => ipcRenderer.invoke('export:run', payload),
   onExportProgress: (cb) => {
     const handler = (_e, line) => cb(line);

@@ -58,7 +58,10 @@ function aspectActive(shift) {
   return ASPECT && !shift;
 }
 
-function confirm() {
+// Named to avoid shadowing the native window.confirm/cancel-adjacent globals
+// (this is a classic, non-module script, so a top-level `function confirm()`
+// would otherwise shadow window.confirm for this whole window).
+function confirmSelection() {
   if (!rect || rect.w < MIN_SIZE || rect.h < MIN_SIZE) return;
   window.regionApi.send({
     x: Math.round(rect.x),
@@ -68,7 +71,7 @@ function confirm() {
   });
 }
 
-function cancel() {
+function cancelSelection() {
   window.regionApi.send(null);
 }
 
@@ -279,9 +282,9 @@ window.addEventListener('mouseup', () => {
 });
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') cancel();
-  else if (e.key === 'Enter') confirm();
+  if (e.key === 'Escape') cancelSelection();
+  else if (e.key === 'Enter') confirmSelection();
 });
 
-recordBtn.addEventListener('click', confirm);
-cancelBtn.addEventListener('click', cancel);
+recordBtn.addEventListener('click', confirmSelection);
+cancelBtn.addEventListener('click', cancelSelection);

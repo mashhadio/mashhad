@@ -1,0 +1,875 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mashhad — Code Review, 2026-07-06</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #f9f9f7;
+    --surface: #fcfcfb;
+    --surface-2: #ffffff;
+    --text: #0b0b0b;
+    --text-2: #52514e;
+    --muted: #898781;
+    --border: rgba(11,11,11,0.10);
+    --grid: #e1e0d9;
+    --accent: #2a78d6;
+    --accent-ink: #ffffff;
+    --sev-critical: #d03b3b;
+    --sev-high: #ec835a;
+    --sev-medium: #b8790a;
+    --sev-low: #0ca30c;
+    --sev-critical-bg: rgba(208,59,59,0.11);
+    --sev-high-bg: rgba(236,131,90,0.14);
+    --sev-medium-bg: rgba(250,178,25,0.16);
+    --sev-low-bg: rgba(12,163,12,0.10);
+    --font-display: ui-serif, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0d0d;
+      --surface: #1a1a19;
+      --surface-2: #202020;
+      --text: #ffffff;
+      --text-2: #c3c2b7;
+      --muted: #93938a;
+      --border: rgba(255,255,255,0.11);
+      --grid: #2c2c2a;
+      --accent: #5b9de8;
+      --sev-medium: #fab219;
+      --sev-critical-bg: rgba(224,100,100,0.16);
+      --sev-high-bg: rgba(236,131,90,0.18);
+      --sev-medium-bg: rgba(250,178,25,0.16);
+      --sev-low-bg: rgba(35,180,35,0.16);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d0d0d; --surface: #1a1a19; --surface-2: #202020; --text: #ffffff;
+    --text-2: #c3c2b7; --muted: #93938a; --border: rgba(255,255,255,0.11);
+    --grid: #2c2c2a; --accent: #5b9de8; --sev-medium: #fab219;
+    --sev-critical-bg: rgba(224,100,100,0.16); --sev-high-bg: rgba(236,131,90,0.18);
+    --sev-medium-bg: rgba(250,178,25,0.16); --sev-low-bg: rgba(35,180,35,0.16);
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    --bg: #f9f9f7; --surface: #fcfcfb; --surface-2: #ffffff; --text: #0b0b0b;
+    --text-2: #52514e; --muted: #898781; --border: rgba(11,11,11,0.10);
+    --grid: #e1e0d9; --accent: #2a78d6; --sev-medium: #b8790a;
+    --sev-critical-bg: rgba(208,59,59,0.11); --sev-high-bg: rgba(236,131,90,0.14);
+    --sev-medium-bg: rgba(250,178,25,0.16); --sev-low-bg: rgba(12,163,12,0.10);
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent); color: var(--accent-ink); }
+
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---------- Header ---------- */
+  header.top {
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    padding: 40px 0 28px;
+  }
+  .kicker {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(28px, 4vw, 38px);
+    font-weight: 500;
+    margin: 0 0 12px;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+  .lede {
+    color: var(--text-2);
+    max-width: 62ch;
+    margin: 0 0 20px;
+    font-size: 16px;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .meta-row dt { font-weight: 600; color: var(--text-2); display: inline; }
+  .meta-row .item { display: flex; gap: 6px; }
+  .meta-row code { font-family: var(--font-mono); font-size: 12.5px; }
+
+  /* ---------- Stat strip ---------- */
+  section.stats { padding: 28px 0 4px; }
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .stat-tile {
+    background: var(--surface);
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+    border: none;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+  }
+  .stat-tile:hover { background: var(--surface-2); }
+  .stat-tile.active { background: var(--surface-2); box-shadow: inset 0 -3px 0 var(--tile-accent, var(--accent)); }
+  .stat-value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 28px;
+    font-weight: 600;
+    line-height: 1;
+  }
+  .stat-label {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .stat-tile[data-sev="critical"] .stat-value { color: var(--sev-critical); }
+  .stat-tile[data-sev="high"] .stat-value { color: var(--sev-high); }
+  .stat-tile[data-sev="medium"] .stat-value { color: var(--sev-medium); }
+  .stat-tile[data-sev="low"] .stat-value { color: var(--sev-low); }
+
+  @media (max-width: 760px) {
+    .stat-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  /* ---------- Category bar ---------- */
+  .cat-bar-wrap { padding: 18px 0 0; }
+  .cat-bar-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+  .cat-bar {
+    display: flex;
+    height: 10px;
+    border-radius: 5px;
+    overflow: hidden;
+    background: var(--grid);
+  }
+  .cat-bar div { height: 100%; }
+  .cat-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; font-size: 13px; color: var(--text-2); }
+  .cat-legend .sw { display: inline-flex; align-items: center; gap: 6px; }
+  .cat-legend .dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+  /* ---------- Filter bar ---------- */
+  .filter-bar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 0;
+    margin-top: 28px;
+  }
+  .filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .chip-group { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-2);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.12s ease;
+  }
+  .chip:hover { border-color: var(--accent); color: var(--text); }
+  .chip.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .chip.active[data-sev="critical"] { background: var(--sev-critical); border-color: var(--sev-critical); color: #fff; }
+  .chip.active[data-sev="high"] { background: var(--sev-high); border-color: var(--sev-high); color: #241205; }
+  .chip.active[data-sev="medium"] { background: var(--sev-medium); border-color: var(--sev-medium); color: #241d05; }
+  .chip.active[data-sev="low"] { background: var(--sev-low); border-color: var(--sev-low); color: #06210a; }
+  .search-input {
+    margin-left: auto;
+    min-width: 220px;
+    flex: 1 1 220px;
+    max-width: 340px;
+    font-family: var(--font-body);
+    font-size: 13.5px;
+    padding: 7px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+  }
+  .search-input::placeholder { color: var(--muted); }
+  .result-count { font-size: 12.5px; color: var(--muted); font-family: var(--font-mono); white-space: nowrap; }
+
+  /* ---------- Table ---------- */
+  section.findings { padding: 22px 0 40px; }
+  .tbl-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+  table.findings-table { width: 100%; border-collapse: collapse; min-width: 760px; background: var(--surface); }
+  .findings-table thead th {
+    text-align: left;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    font-weight: 600;
+    padding: 12px 14px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+  }
+  .findings-table td {
+    padding: 13px 14px;
+    border-bottom: 1px solid var(--grid);
+    vertical-align: top;
+    font-size: 13.5px;
+  }
+  .row-main { cursor: pointer; }
+  .row-main:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .row-main.expanded { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+  .col-rank { font-family: var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; width: 34px; }
+  .col-sev { width: 92px; }
+  .col-cat { width: 108px; color: var(--text-2); font-size: 12.5px; }
+  .col-title { font-weight: 500; }
+  .col-loc { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); white-space: nowrap; }
+  .col-effort { width: 54px; text-align: center; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+  .col-chevron { width: 22px; color: var(--muted); text-align: center; transition: transform 0.15s ease; }
+  .row-main.expanded .col-chevron { transform: rotate(90deg); color: var(--accent); }
+
+  .sev-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 5px;
+  }
+  .sev-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .sev-pill.critical { background: var(--sev-critical-bg); color: var(--sev-critical); }
+  .sev-pill.critical::before { background: var(--sev-critical); }
+  .sev-pill.high { background: var(--sev-high-bg); color: color-mix(in srgb, var(--sev-high) 75%, black); }
+  .sev-pill.high::before { background: var(--sev-high); }
+  .sev-pill.medium { background: var(--sev-medium-bg); color: color-mix(in srgb, var(--sev-medium) 80%, black); }
+  .sev-pill.medium::before { background: var(--sev-medium); }
+  .sev-pill.low { background: var(--sev-low-bg); color: var(--sev-low); }
+  .sev-pill.low::before { background: var(--sev-low); }
+  :root[data-theme="dark"] .sev-pill.high, [data-theme="dark"] .sev-pill.high { color: #ffd8c4; }
+  :root[data-theme="dark"] .sev-pill.medium, [data-theme="dark"] .sev-pill.medium { color: #ffe8b0; }
+  @media (prefers-color-scheme: dark) {
+    .sev-pill.high { color: #ffd8c4; }
+    .sev-pill.medium { color: #ffe8b0; }
+  }
+
+  .detail-row td { padding: 0; border-bottom: 1px solid var(--grid); }
+  .detail-row.hidden { display: none; }
+  .detail-inner {
+    padding: 6px 14px 22px 50px;
+    background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px 28px;
+  }
+  @media (max-width: 720px) { .detail-inner { grid-template-columns: 1fr; } }
+  .detail-block h4 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 0 0 6px;
+    font-weight: 600;
+  }
+  .detail-block p { margin: 0; font-size: 13.5px; color: var(--text-2); }
+  .detail-block.full { grid-column: 1 / -1; }
+  pre.evidence {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    color: var(--text-2);
+  }
+  .fix-block p { color: var(--text); }
+  .empty-state { padding: 40px 0; text-align: center; color: var(--muted); font-size: 14px; }
+
+  /* ---------- Roadmap ---------- */
+  section.roadmap { padding: 8px 0 60px; }
+  section.roadmap h2 {
+    font-family: var(--font-display);
+    font-size: 24px;
+    font-weight: 500;
+    margin: 0 0 6px;
+  }
+  section.roadmap > .wrap > p.sub { color: var(--text-2); margin: 0 0 22px; max-width: 68ch; }
+  .phase-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 860px) { .phase-grid { grid-template-columns: 1fr; } }
+  .phase-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 20px 22px;
+    border-top: 3px solid var(--phase-color, var(--accent));
+  }
+  .phase-card h3 { margin: 0 0 4px; font-size: 15.5px; }
+  .phase-card .phase-sub { font-size: 12.5px; color: var(--muted); margin: 0 0 14px; }
+  .phase-card ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 9px; }
+  .phase-card li { font-size: 13px; color: var(--text-2); }
+  .phase-card li b { color: var(--text); font-weight: 500; }
+  .phase-card li code { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
+
+  footer.report-footer {
+    border-top: 1px solid var(--border);
+    padding: 22px 0 40px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <p class="kicker">Code Review Report</p>
+    <h1>Mashhad (مشهد) — Findings &amp; Remediation Plan</h1>
+    <p class="lede">A full pass over the Electron screen-recorder app: recording pipeline, Studio editor, and the main-process/ffmpeg export path. Every finding below was independently re-verified against the current source before being ranked — three candidates from the initial sweep did not hold up and were dropped.</p>
+    <dl class="meta-row">
+      <div class="item"><dt>Date:</dt> 2026-07-06</div>
+      <div class="item"><dt>Scope:</dt> <code>src/main</code>, <code>src/renderer</code>, <code>src/preload</code> (~9,100 LOC)</div>
+      <div class="item"><dt>Method:</dt> full-file read + cross-file trace, per-claim re-verification</div>
+      <div class="item"><dt>Findings:</dt> 54 confirmed</div>
+    </dl>
+  </div>
+</header>
+
+<section class="stats">
+  <div class="wrap">
+    <div class="stat-grid" id="statGrid">
+      <button class="stat-tile" data-filter-all>
+        <span class="stat-value" id="statTotal">54</span>
+        <span class="stat-label">All findings</span>
+      </button>
+      <button class="stat-tile" data-sev="critical" style="--tile-accent: var(--sev-critical)">
+        <span class="stat-value">4</span>
+        <span class="stat-label">Critical</span>
+      </button>
+      <button class="stat-tile" data-sev="high" style="--tile-accent: var(--sev-high)">
+        <span class="stat-value">7</span>
+        <span class="stat-label">High</span>
+      </button>
+      <button class="stat-tile" data-sev="medium" style="--tile-accent: var(--sev-medium)">
+        <span class="stat-value">22</span>
+        <span class="stat-label">Medium</span>
+      </button>
+      <button class="stat-tile" data-sev="low" style="--tile-accent: var(--sev-low)">
+        <span class="stat-value">21</span>
+        <span class="stat-label">Low</span>
+      </button>
+    </div>
+
+    <div class="cat-bar-wrap">
+      <p class="cat-bar-label">By category</p>
+      <div class="cat-bar" id="catBar"></div>
+      <div class="cat-legend" id="catLegend"></div>
+    </div>
+  </div>
+</section>
+
+<div class="filter-bar">
+  <div class="wrap filter-row">
+    <div class="chip-group" id="sevChips">
+      <button class="chip active" data-sev-filter="all">All severities</button>
+      <button class="chip" data-sev="critical" data-sev-filter="critical">Critical</button>
+      <button class="chip" data-sev="high" data-sev-filter="high">High</button>
+      <button class="chip" data-sev="medium" data-sev-filter="medium">Medium</button>
+      <button class="chip" data-sev="low" data-sev-filter="low">Low</button>
+    </div>
+    <div class="chip-group" id="catChips">
+      <button class="chip active" data-cat-filter="all">All categories</button>
+      <button class="chip" data-cat-filter="Bug">Bug</button>
+      <button class="chip" data-cat-filter="Performance">Performance</button>
+      <button class="chip" data-cat-filter="Refactoring">Refactoring</button>
+      <button class="chip" data-cat-filter="Leak">Leak</button>
+      <button class="chip" data-cat-filter="Security">Security</button>
+    </div>
+    <input class="search-input" id="searchBox" type="search" placeholder="Search title, file, or text…" aria-label="Search findings">
+    <span class="result-count" id="resultCount"></span>
+  </div>
+</div>
+
+<section class="findings">
+  <div class="wrap">
+    <div class="tbl-scroll">
+      <table class="findings-table">
+        <thead>
+          <tr>
+            <th class="col-rank">#</th>
+            <th class="col-sev">Severity</th>
+            <th class="col-cat">Category</th>
+            <th class="col-title">Finding</th>
+            <th class="col-loc">Location</th>
+            <th class="col-effort">Effort</th>
+            <th class="col-chevron"></th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+    <div class="empty-state hidden" id="emptyState">No findings match the current filters.</div>
+  </div>
+</section>
+
+<section class="roadmap">
+  <div class="wrap">
+    <h2>Remediation roadmap</h2>
+    <p class="sub">Suggested sequencing rather than a mandate — quick, high-impact fixes first, then the performance work that scales with recording/project length, then the structural editor.js split that the duplication findings above all point toward.</p>
+    <div class="phase-grid">
+      <div class="phase-card" style="--phase-color: var(--sev-critical)">
+        <h3>Phase 1 — Stop the data loss</h3>
+        <p class="phase-sub">Small, isolated fixes. Do these first.</p>
+        <ul>
+          <li><b>Guard the recording state machine</b> — add an <code>arming</code>/<code>stopping</code> check in <code>startRecording</code>/<code>toggleRecord</code> and a session guard in <code>rec:start</code> (#1, #2).</li>
+          <li><b>Make zoom-block edits undoable and dirty-tracked</b> — the app's signature feature currently isn't (#3).</li>
+          <li><b>Add a timeout to <code>resolveDuration()</code></b> — one line, matches its three siblings (#5).</li>
+          <li><b>Add <code>onerror</code> handlers</b> to both MediaRecorders and an <code>ended</code> listener on the capture track (#6, #7).</li>
+        </ul>
+      </div>
+      <div class="phase-card" style="--phase-color: var(--sev-high)">
+        <h3>Phase 2 — Scale with recording length</h3>
+        <p class="phase-sub">These get worse as recordings/projects grow, which is the app's core use case.</p>
+        <ul>
+          <li><b>Stop keeping full-length decoded PCM in memory</b> — stream or downsample for waveform peaks and silence detection (#4, #18).</li>
+          <li><b>Cache <code>editedStartOf</code>/<code>editedDuration</code></b> with incremental invalidation instead of recomputing per frame and per rebuild (#8, #15, #29).</li>
+          <li><b>Stop rebuilding the whole timeline DOM on every edit</b> — diff instead of <code>innerHTML = ''</code> (#9).</li>
+          <li><b>Stream the export buffer to disk</b> instead of one IPC message + a blocking <code>writeFileSync</code> (#10).</li>
+        </ul>
+      </div>
+      <div class="phase-card" style="--phase-color: var(--accent)">
+        <h3>Phase 3 — Split editor.js</h3>
+        <p class="phase-sub">3,496 lines, ~10 separable responsibilities. The duplication findings are symptoms of this.</p>
+        <ul>
+          <li>Natural module boundaries: playback engine, timeline render, drag/interaction, clip/edited-time model, project persistence, undo, track ops, audio analysis, export.</li>
+          <li>Collapse the four duration-resolvers, the audio/overlay track-lane pairs, and the cover-fit math into shared helpers as part of the same pass (#23, #25, #53).</li>
+          <li>Same treatment applies at smaller scale to <code>ffmpeg-export.js</code>'s <code>exportVideo</code> (#24).</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="report-footer">
+  <div class="wrap">
+    Generated for the <code style="font-family: var(--font-mono);">smooth-screen-record</code> repository. Report-only — no source files were modified as part of this review.
+  </div>
+</footer>
+
+<script>
+(function () {
+  var CAT_COLORS = {
+    'Bug': 'var(--sev-critical)',
+    'Performance': 'var(--accent)',
+    'Refactoring': '#8a7a5c',
+    'Leak': '#7a5cc7',
+    'Security': '#0ca3a3'
+  };
+
+  var F = [
+    // ---------------- CRITICAL ----------------
+    {sev:'critical', cat:'Bug', title:'Overlapping recordings via an unguarded "arming" race', files:['src/renderer/index.js:948-949','src/renderer/index.js:1147-1155','src/main/main.js:498-511'], effort:'M',
+      scenario:'startRecording() only checks `if (!selectedSource || isRecording) return`. During the async "arming" window (isRecording is still false), a second click on the record button or a repeated hotkey press calls startRecording() again — toggleRecord() also only checks isRecording, not arming. Two calls reach window.api.startRecording, and rec:start in main.js overwrites the module-level recSession with no guard, leaking the first fs.createWriteStream and orphaning its partial .webm file.',
+      evidence:'async function startRecording() {\n  if (!selectedSource || isRecording) return; // `arming` not consulted here\n  recordBtn.disabled = true;\n  arming = true; // checked by the preview-pause logic only, never by start/toggle\n...\n// main.js\nrecSession = { videoPath, ... videoStream: fs.createWriteStream(videoPath) };',
+      fix:'Check `arming` alongside `isRecording` in both startRecording() and toggleRecord(); in rec:start, reject or safely tear down an existing recSession before creating a new one.'},
+    {sev:'critical', cat:'Bug', title:'Stop/restart race lets the old recording tear down the new one', files:['src/renderer/index.js:1137-1144'], effort:'M',
+      scenario:'stopRecording() sets isRecording = false synchronously, before the async onstop → onRecordingStopped flush (which calls teardownStreams()) completes. If the hotkey fires again in that gap, a new recording starts and pushes its tracks onto the same still-populated `streams` array the old recording is about to tear down — the new recording\'s tracks can be stopped by the old session\'s cleanup.',
+      evidence:'function stopRecording() {\n  if (mediaRecorder && mediaRecorder.state !== \'inactive\') {\n    isRecording = false; // no "stopping" state\n    stopBtn.disabled = true;\n    if (camRecorder ...) camRecorder.stop();\n    mediaRecorder.stop(); // flush is async — onstop fires later\n  }\n}',
+      fix:'Introduce an explicit state ("idle" / "arming" / "recording" / "stopping") instead of a single isRecording boolean, and ignore start/stop/toggle calls that aren\'t valid for the current state.'},
+    {sev:'critical', cat:'Bug', title:'Zoom-block edits bypass undo history and autosave dirty-tracking', files:['src/renderer/editor.js:1876-1919','src/renderer/editor.js:1794-1800','src/renderer/editor.js:3028-3042'], effort:'M',
+      scenario:'snapshotState()/applyState() (editor.js:2088-2099) only capture clips, overlays, and audio — never `blocks` (the zoom regions) or scene state. autoZoom, addZoomHere, clearZoom, deleteBlock, block-drag-on-mouseup, and the zoom-level input never call pushHistory() or markDirty() (markDirty() only fires from the unrelated "no block selected" branch at line 3039). Zoom edits — the product\'s headline feature — are silently un-undoable and can be lost if the app closes before an unrelated edit happens to trigger autosave.',
+      evidence:'function addZoomHere() {\n  ...\n  blocks.push(b); // no pushHistory(), no markDirty()\n  buildTimeline();\n  selectBlock(b);\n  drawAt(video.currentTime);\n}\nfunction snapshotState() {\n  return { clips: ..., overlays: ..., audio: ... }; // blocks omitted\n}',
+      fix:'Add `blocks` (and scene/transition state) to snapshotState()/applyState(), and call pushHistory() + markDirty() from every block mutator: autoZoom, addZoomHere, clearZoom, deleteBlock, drag-end, and the zoom-level input.'},
+    {sev:'critical', cat:'Performance', title:'Full-length audio decoded to raw PCM and cached forever', files:['src/renderer/editor.js:2699-2732','src/renderer/editor.js:1298-1325'], effort:'L',
+      scenario:'getRecordingAudioBuffer()/getSourceAudioBuffer() fetch the entire media file and run decodeAudioData() on it in full, for both waveform-peak generation and silence detection. A one-hour 48kHz stereo recording decodes to roughly 1.3GB of float32 PCM, held in `recAudioBuffer`/`importAudioBuffers` for the rest of the session with no eviction. Long recordings — the app\'s core use case — risk exhausting renderer memory.',
+      evidence:'let recAudioBuffer = null; // decoded recording audio, cached across runs\nasync function getRecordingAudioBuffer() {\n  if (recAudioBuffer) return recAudioBuffer;\n  const arr = await (await fetch(recording.videoUrl)).arrayBuffer();\n  ...\n  recAudioBuffer = await actx.decodeAudioData(arr); // full decode, never released\n}',
+      fix:'Decode in chunks (Web Audio does not support this natively — consider an OfflineAudioContext at reduced sample rate for waveform peaks, or a WASM/worker decoder that streams), and release buffers once silence detection/waveform generation are done rather than caching for the session.'},
+
+    // ---------------- HIGH ----------------
+    {sev:'high', cat:'Bug', title:'resolveDuration() has no timeout fallback', files:['src/renderer/editor.js:686-699'], effort:'S',
+      scenario:'Unlike its three siblings (resolveElDuration, resolveCamDuration, resolveAudioDuration — all of which have a setTimeout fallback), resolveDuration() waits indefinitely on a durationchange event. init() awaits it directly, so if a file never reports a finite duration, the editor never finishes loading — no error, no way out for the user short of a force-quit.',
+      evidence:'function resolveDuration() {\n  return new Promise((resolve) => {\n    if (isFinite(video.duration) && video.duration > 0) return resolve(video.duration);\n    const onTime = () => { ... };\n    video.addEventListener(\'durationchange\', onTime);\n    video.currentTime = 1e6;\n    // no setTimeout fallback — can hang forever\n  });\n}',
+      fix:'Add the same setTimeout(finish, 1200) pattern used in resolveCamDuration, resolving with a sane default (or rejecting with a clear error) if duration never resolves.'},
+    {sev:'high', cat:'Bug', title:'No MediaRecorder.onerror handler on either recorder', files:['src/renderer/index.js:926','src/renderer/index.js:1058','src/renderer/index.js:1076-1079'], effort:'S',
+      scenario:'Neither the main MediaRecorder nor the webcam camRecorder has an onerror handler assigned. If the encoder fails mid-recording (codec error, resource exhaustion), the recording silently stops producing data with no user-visible signal — the timer keeps running and the UI looks like it\'s still recording.',
+      evidence:'mediaRecorder = new MediaRecorder(combined, { mimeType: mime, videoBitsPerSecond: bitrate });\nmediaRecorder.ondataavailable = (e) => { ... };\nmediaRecorder.onstop = onRecordingStopped;\n// no mediaRecorder.onerror',
+      fix:'Assign onerror on both recorders; on error, stop the recording, surface a visible message, and preserve whatever was already flushed to disk.'},
+    {sev:'high', cat:'Bug', title:'Screen-share revocation ("ended" track event) is unhandled', files:['src/renderer/index.js:997-1008'], effort:'M',
+      scenario:'The captured display track from getUserMedia has no `ended` listener. If the OS revokes screen-recording permission mid-session, the user closes the shared window, or a display disconnects, the track fires `ended` and simply stops producing frames — the recording silently freezes on the last frame with the app still reporting "recording" and no teardown.',
+      evidence:'const fullStream = await navigator.mediaDevices.getUserMedia({\n  audio: false,\n  video: { mandatory: { chromeMediaSource: \'desktop\', ... } },\n});\nstreams.push(fullStream);\n// fullStream.getVideoTracks()[0].onended is never set',
+      fix:'Listen for `ended` on the capture track; on fire, stop the recording gracefully and notify the user why it ended.'},
+    {sev:'high', cat:'Performance', title:'Per-frame O(n) edited-time recomputation in the playback loop', files:['src/renderer/editor.js:1166-1167','src/renderer/editor.js:1521-1522'], effort:'M',
+      scenario:'editedStartOf() and editedDuration() are both O(n) over all clips. renderLoop() calls both every animation frame during playback, and movePlayhead() recomputes editedDuration() again on every playhead move. On a project with hundreds of clips, this is real per-frame work competing with video decode and canvas compositing — a direct contributor to dropped frames during playback.',
+      evidence:'// renderLoop — runs every animation frame during playback (editor.js:1167):\nplayheadEdited = clamp(editedStartOf(playIdx) + (video.currentTime - c.start) / sp, 0, editedDuration());\n// both editedStartOf() and editedDuration() are O(clips) scans',
+      fix:'Cache cumulative clip-start offsets (prefix sums) and invalidate only on edits that change clip order/length, rather than recomputing from scratch on every frame.'},
+    {sev:'high', cat:'Performance', title:'Timeline and waveform canvases fully rebuilt on every edit', files:['src/renderer/editor.js:1368-1453','src/renderer/editor.js:1333-1366'], effort:'L',
+      scenario:'buildTimeline() runs on every drag-end, resize, split, and both resize handlers (36 call sites), and attachWave() unconditionally creates a brand-new <canvas> per clip every single time it\'s called. buildAudioRows()/buildOverlayRows() do innerHTML = \'\' and rebuild from scratch too. On a timeline with many clips this makes routine dragging/trimming visibly janky, and gets worse the longer the project grows.',
+      evidence:'// attachWave — runs for every clip on every buildTimeline() (editor.js:1342):\nconst cv = document.createElement(\'canvas\'); // brand-new canvas each call\ncv.className = \'clip-wave\';\n// buildTimeline() has 36 call sites: drag-end, resize, split, import…',
+      fix:'Diff the DOM instead of rebuilding: keep a canvas per clip element and only redraw the waveform region that changed; reuse row elements across rebuilds keyed by clip id.'},
+    {sev:'high', cat:'Performance', title:'Exported video buffer: full IPC copy + blocking sync write on the main process', files:['src/main/main.js:989-991'], effort:'M',
+      scenario:'The entire rendered export (potentially hundreds of MB for a multi-minute 4K capture) is sent as one structured-clone IPC message, then written with a synchronous fs.writeFileSync on the Electron main process — which blocks the main process event loop, freezing window management, other IPC handlers, and progress reporting for the duration of the write.',
+      evidence:"ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {\n  const tmpZoomed = path.join(os.tmpdir(), `ssr-zoomed-${Date.now()}.webm`);\n  fs.writeFileSync(tmpZoomed, Buffer.from(zoomedBuffer)); // blocks main process\n  ...",
+      fix:'Stream the buffer to disk in chunks over IPC (mirroring the rec:videoChunk pattern already used for recording) and switch to fs.promises.writeFile, or write from a worker thread.'},
+    {sev:'high', cat:'Bug', title:'Per-chunk write failures are swallowed until the recording stops', files:['src/renderer/index.js:64-66','src/renderer/index.js:1118'], effort:'S',
+      scenario:'queueChunk() chains writes through `writeQueue = p.catch(() => {})`, so a single failed chunk write doesn\'t break the chain — but the underlying promise `p` (pushed into pendingWrites) still rejects, and that rejection is only observed via `await Promise.all(pendingWrites)` at recording-stop time. A disk-write failure partway through a long recording is invisible to the user until the very end, by which point the file may already be unusable.',
+      evidence:'function queueChunk(blob, sender) {\n  const p = writeQueue.then(async () => {\n    const buf = await blob.arrayBuffer();\n    await sender(buf);\n  });\n  writeQueue = p.catch(() => {}); // chain survives, but error isn\'t surfaced\n  pendingWrites.push(p);\n}',
+      fix:'Surface write failures immediately (e.g. abort the recording and notify the user) rather than only discovering them in the final Promise.all at stop time.'},
+
+    // ---------------- MEDIUM ----------------
+    {sev:'medium', cat:'Performance', title:'Write-stream backpressure ignored on video/cam chunks', files:['src/main/main.js:521','src/main/main.js:528'], effort:'M',
+      scenario:'rec:videoChunk and rec:camChunk both call `.write(Buffer.from(buffer))` and discard the boolean return value. If disk I/O falls behind a high-bitrate capture, Node buffers the writes in memory instead of applying backpressure, risking unbounded memory growth during long recordings on slow disks.',
+      evidence:"ipcMain.handle('rec:videoChunk', async (_evt, buffer) => {\n  if (recSession && recSession.videoStream) recSession.videoStream.write(Buffer.from(buffer)); // return value ignored\n  return { ok: true };\n});",
+      fix:'Check the return value of .write() and, when false, await the stream\'s `drain` event before acknowledging the next chunk (or apply flow control on the renderer side).'},
+    {sev:'medium', cat:'Bug', title:'audio:preview has no concurrency guard', files:['src/main/main.js:1060-1073'], effort:'S',
+      scenario:'Two audio:preview calls with the same cache key both miss the existsSync cache check and both spawn ffmpeg writing to distinct Date.now()-named temp files; whichever resolves last wins the cache slot, orphaning the other\'s temp .m4a file on disk.',
+      evidence:'// two concurrent calls with the same key both see cache miss,\n// both call exportCleanAudio() to a distinct `Date.now()`-named path',
+      fix:'Track in-flight preview requests by key (a Map<key, Promise>) and have concurrent callers await the same in-flight promise instead of racing.'},
+    {sev:'medium', cat:'Leak', title:'audioPreviewCache and its temp files grow unbounded for the app session', files:['src/main/main.js:1059','src/main/main.js:1070-1072'], effort:'S',
+      scenario:'Every distinct denoise-profile/echo combination previewed adds an entry to audioPreviewCache and a temp .m4a file; neither is ever evicted during the session — only cleanupStaleFiles() on the next app launch reclaims them.',
+      evidence:'const audioPreviewCache = {}; // never pruned this session',
+      fix:'Cap the cache size (LRU eviction) and unlink the corresponding temp file when an entry is evicted.'},
+    {sev:'medium', cat:'Performance', title:'O(blocks × clips²) position recompute in the timeline rebuild', files:['src/renderer/editor.js:1393','src/renderer/editor.js:1425-1445','src/renderer/editor.js:2032-2036'], effort:'M',
+      scenario:'editedStartOf(ci) is itself O(clips). buildTimeline() calls it once per clip, and its zoom-block-marker pass nests `blocks.forEach` inside `clips.forEach` with an editedStartOf() call inside — up to O(blocks × clips²) work on every timeline rebuild for heavily-edited projects.',
+      evidence:'blocks.forEach((b) => {\n  clips.forEach((c, ci) => {\n    const start = editedStartOf(ci); // O(clips), nested inside O(blocks × clips)\n    ...\n  });\n});',
+      fix:'Precompute a prefix-sum array of edited clip start times once per rebuild and index into it, instead of recomputing editedStartOf from scratch per (block, clip) pair.'},
+    {sev:'medium', cat:'Bug', title:'importVideos leaves a no-op undo entry and has no re-entrancy guard', files:['src/renderer/editor.js:379-394'], effort:'S',
+      scenario:'pushHistory() is called before the async per-file import loop starts; if every file in the batch fails to load, an identical (no-op) snapshot is left on the undo stack. There\'s also no busy flag, so clicking import again mid-loop can interleave two import loops mutating `sources`/`clips` concurrently.',
+      evidence:'async function importVideos(paths) {\n  pushHistory(); // committed before we know if anything actually imports\n  for (const p of paths) { /* await createSourceEl/resolveElDuration */ }\n}',
+      fix:'Only call pushHistory() after at least one file succeeds, and guard re-entrancy with a simple in-flight flag disabled on the import button.'},
+    {sev:'medium', cat:'Bug', title:'removeSilences reads clips after a long await with no edit lock', files:['src/renderer/editor.js:2810-2884'], effort:'M',
+      scenario:'removeSilences() awaits a potentially slow full-audio decode, then reads the live `clips` array afterward to build the trimmed result. Only playback is paused during the wait — removeSilenceBtn is re-enabled before the clips-mutation section runs, so a timeline edit made during the decode can be silently overwritten or cause an inconsistent result.',
+      evidence:'removeSilenceBtn.disabled = false; // re-enabled early, well before clips is read\n...\nfor (const c of clips) { /* built from live, possibly-just-edited clips */ }',
+      fix:'Keep the button (and other structural edits) disabled for the full duration of the operation, not just during the decode.'},
+    {sev:'medium', cat:'Performance', title:'Waveform peak computation blocks the main thread', files:['src/renderer/editor.js:1311-1319'], effort:'M',
+      scenario:'ensureWaveform() iterates every sample of every channel in plain JS on the main thread with no Worker/OffscreenCanvas offload. Importing a long audio/video file freezes the UI for the duration of peak computation.',
+      evidence:'for (let ch = 0; ch < numChannels; ch++) {\n  const data = audioBuffer.getChannelData(ch); // full sample scan, main thread\n  for (let i = 0; i < data.length; i++) { ... }\n}',
+      fix:'Move peak extraction into a Web Worker (transfer the decoded channel data) so long imports don\'t block the UI thread.'},
+    {sev:'medium', cat:'Bug', title:'cam-processor start() has no generation guard against rapid restarts', files:['src/renderer/cam-processor.js:48-65'], effort:'S',
+      scenario:'Unlike the recorder\'s micMonitorToken pattern, CameraProcessor.start() has no token/generation counter. Rapid camera-select changes or preview toggles race on the awaited getUserMedia call — a slower, earlier call can resolve last and bind a stale stream/canvas over a newer one.',
+      evidence:'async start(deviceId) {\n  await this.stop();\n  // no generation token — compare with the recorder\'s micMonitorToken pattern\n  this.rawStream = await navigator.mediaDevices.getUserMedia({\n    video: { deviceId: deviceId ? { exact: deviceId } : undefined, ... },\n  });\n  ...',
+      fix:'Add a generation counter incremented on every start() call; ignore the result of a getUserMedia call if the generation has since changed.'},
+    {sev:'medium', cat:'Bug', title:'cam-processor _busy is never reset in stop()', files:['src/renderer/cam-processor.js:67-74'], effort:'S',
+      scenario:'stop() releases the webcam stream but never resets this._busy. Under ordinary conditions the in-flight _loop iteration still resets it once seg.send() settles, but a rapid stop-then-start can re-arm a new rAF loop while the old one\'s continuation is still pending, producing duplicate concurrent segmentation loops.',
+      evidence:'async stop() {\n  this.running = false;\n  if (this.rawStream) {\n    this.rawStream.getTracks().forEach((t) => t.stop());\n    this.rawStream = null;\n  }\n  this.video.srcObject = null;\n} // this._busy is never reset',
+      fix:'Explicitly reset `_busy = false` in stop() and have the loop check a generation token (shared fix with the start() guard above) before re-arming.'},
+    {sev:'medium', cat:'Security', title:'Recording filenames are interpolated unescaped into innerHTML', files:['src/renderer/index.js:1252-1266'], effort:'S',
+      scenario:'loadLibrary() rebuilds the recordings list by setting `el.innerHTML` with `it.name` interpolated directly, unescaped. A recording file with `<`/`>`/`"` characters in its name (however it got there — manual rename, a future import-naming feature) injects arbitrary markup into the library view.',
+      evidence:"el.innerHTML = `\n  <div class=\"rec-info\">\n    <div class=\"rec-name\">${it.name}</div>  // it.name interpolated, no escaping\n    ...`;",
+      fix:'Escape the filename (or build the element with textContent/createElement instead of innerHTML) before inserting it into the DOM.'},
+    {sev:'medium', cat:'Performance', title:'Three full-resolution canvases always allocated regardless of use', files:['src/renderer/editor.js:314-321'], effort:'S',
+      scenario:'setCanvasSize() sizes the main canvas plus transCanvas and sceneTransCanvas identically, even when clip transitions and scene crossfades are never used in a project. At 4K that\'s roughly 95MB of retained canvas backing store held for the life of the editor session.',
+      evidence:'canvas.width = w; canvas.height = h;\ntransCanvas.width = w; transCanvas.height = h; // allocated even if transitions unused\nsceneTransCanvas.width = w; sceneTransCanvas.height = h;',
+      fix:'Lazily allocate transCanvas/sceneTransCanvas only when a transition or scene crossfade is actually about to render.'},
+    {sev:'medium', cat:'Refactoring', title:'Four duplicate "resolve Infinity duration" helpers, inconsistent timeout coverage', files:['src/renderer/editor.js:686-699','src/renderer/editor.js:348-362','src/renderer/editor.js:666-684','src/renderer/editor.js:2015-2029'], effort:'M',
+      scenario:'resolveDuration, resolveElDuration, resolveCamDuration, and resolveAudioDuration all reimplement the same "check finite duration → wait for durationchange → seek to 1e6 → (mostly) timeout" shape independently, which is how resolveDuration ended up missing the timeout that the other three have (see the High-severity finding above).',
+      evidence:'// four near-identical functions, one shape, duplicated four times\nfunction resolveElDuration(el) { ... setTimeout(finish, 2000); }\nfunction resolveCamDuration() { ... setTimeout(finish, 1200); }\nfunction resolveDuration() { /* no timeout */ }\nfunction resolveAudioDuration(el) { ... }',
+      fix:'Collapse into one parameterized helper (element, timeoutMs) used by all four call sites — fixes the missing-timeout bug as a side effect.'},
+    {sev:'medium', cat:'Refactoring', title:'exportVideo() is one ~200-line function mixing five concerns', files:['src/main/ffmpeg-export.js:263-463'], effort:'M',
+      scenario:'exportVideo spans the GIF-export branch, encoder selection, three different audio-graph layouts (single-source, multi-source, overlay), overlay-clip compositing, and click-SFX mixing all in one function body — hard to test or modify any one concern in isolation.',
+      evidence:'async function exportVideo(...) {\n  // ~200 lines: GIF branch, encoder choice, 3 audio layouts, overlays, click SFX\n}',
+      fix:'Split into buildVideoFilterGraph(), buildAudioFilterGraph() (per layout), and a thin orchestrating exportVideo() that assembles the ffmpeg args.'},
+    {sev:'medium', cat:'Refactoring', title:'Overlay/audio track-lane logic duplicated ~150 lines across 6 pairs', files:['src/renderer/editor.js:1456-1519','src/renderer/editor.js:1936-1967','src/renderer/editor.js:450-469','src/renderer/editor.js:1969-1981'], effort:'L',
+      scenario:'buildAudioRows/buildOverlayRows, allOverlayClips/allAudioClips, overlayCoveringOnTrack/audioCoveringOnTrack, findOverlayClip/findAudioClip, overlayElFor/audioElFor, and pruneOverlayEls/pruneAudioEls are six near-identical pairs — one for the overlay-video track type, one for the audio-track type.',
+      evidence:'function buildAudioRows() { /* ~30 lines */ }\nfunction buildOverlayRows() { /* nearly identical ~30 lines */ }\n// same pattern repeats 5 more times across the file',
+      fix:'Introduce a shared "track lane" abstraction parameterized by track kind (overlay vs audio) and collapse each pair into one implementation.'},
+    {sev:'medium', cat:'Security', title:'Blanket permission grant, no navigation guard, unvalidated renderer-supplied paths', files:['src/main/main.js:1124','src/main/main.js:1077','src/main/main.js:704'], effort:'M',
+      scenario:'setPermissionRequestHandler grants media/audioCapture/display-capture to any request with no origin check (low risk here since all content is local, but no defense-in-depth if that changes). Separately, there is no setWindowOpenHandler/will-navigate guard anywhere, and shell.showItemInFolder / recordings:open accept a renderer-supplied path with only an existence check — not validated to be inside RECORDINGS_DIR.',
+      evidence:"session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {\n  callback(permission === 'media' || permission === 'audioCapture' || permission === 'display-capture');\n}); // no check of which webContents/origin is asking",
+      fix:'Scope the permission handler to the specific permissions actually needed; add a setWindowOpenHandler that denies by default; validate that paths passed to showItemInFolder/recordings:open resolve inside RECORDINGS_DIR.'},
+    {sev:'medium', cat:'Leak', title:'resolveElDuration leaks its durationchange listener on the timeout path', files:['src/renderer/editor.js:348-362'], effort:'S',
+      scenario:'The durationchange listener is only removed inside onTime() once duration becomes finite. If the 2000ms setTimeout fires first (duration never resolves), the listener is never removed and stays attached to that media element for its lifetime.',
+      evidence:'const onTime = () => {\n  if (isFinite(el.duration)) {\n    el.removeEventListener(\'durationchange\', onTime); // only removed on this path\n    ...\n  }\n};\nel.addEventListener(\'durationchange\', onTime);\nsetTimeout(() => resolve(isFinite(el.duration) ? el.duration : 0), 2000); // resolves without removing onTime',
+      fix:'Remove the listener unconditionally in the timeout branch as well, not only on the finite-duration path.'},
+    {sev:'medium', cat:'Leak', title:'Audio/waveform buffer caches never pruned when a source is deleted', files:['src/renderer/editor.js:2716-2717','src/renderer/editor.js:1296','src/renderer/editor.js:2699'], effort:'S',
+      scenario:'importAudioBuffers, waveformCache, and recAudioBuffer are module-level caches keyed by source id; deleteClip and the source-removal path never clear the corresponding entries, so a long editing session that imports and removes many sources accumulates decoded audio buffers indefinitely.',
+      evidence:'const importAudioBuffers = new Map(); // sourceId -> AudioBuffer, never deleted on source removal',
+      fix:'Clear the matching cache entries when a source is removed from the project.'},
+    {sev:'medium', cat:'Performance', title:'Per-frame O(clicks × clips) and array-scan work compounds the playback hot path', files:['src/renderer/editor.js:780','src/renderer/editor.js:1200-1211','src/renderer/editor.js:1414-1421'], effort:'M',
+      scenario:'drawAt() runs blocks.filter() on every drawn frame (allocation at 60fps); playClickSounds() scans the entire clickTimes array every frame; and the click-tick pass in buildTimeline() calls sourceToEdited() (itself O(clips)) once per click, giving O(clicks × clips) on every rebuild. These compound the O(n)-per-frame issue above on busy timelines.',
+      evidence:'function drawAt(t) {\n  const activeBlocks = blocks.filter(b => ...); // new array every frame\n  ...\n}',
+      fix:'Precompute/cache per-frame lookups (e.g. sorted click times with a moving pointer instead of a full scan) alongside the editedStartOf caching fix above.'},
+    {sev:'medium', cat:'Performance', title:'Two independent resize handlers both rebuild the whole timeline', files:['src/renderer/editor.js:2900','src/renderer/editor.js:3157-3161'], effort:'S',
+      scenario:'Two separate window "resize" listeners are registered — one calling relayoutTimeline() (itself calling buildTimeline() + movePlayhead), the other calling buildTimeline() + movePlayhead() directly. Every resize does the full rebuild twice.',
+      evidence:"window.addEventListener('resize', () => { if (clips.length) relayoutTimeline(); }); // editor.js:2900\n// ...2,250 lines later (editor.js:3157)...\nwindow.addEventListener('resize', () => {\n  if (drag || clipDrag) return;\n  buildTimeline();\n  movePlayhead(playheadEdited);\n});",
+      fix:'Merge into a single resize handler.'},
+    {sev:'medium', cat:'Refactoring', title:'"Wait for seeked, then redraw" reimplemented in 5-6 places', files:['src/renderer/editor.js:507-513','src/renderer/editor.js:1528-1534','src/renderer/editor.js:1101-1109','src/renderer/editor.js:3382-3399','src/renderer/editor.js:3446-3458'], effort:'M',
+      scenario:'updateOverlayPlayback, redrawAfterSeek, gotoClipMedia\'s seek-wait guard, and two spots in the export pipeline (the step() function and begin()) each hand-roll the same "register a seeked listener with a timeout fallback, then proceed" pattern independently.',
+      evidence:'el.addEventListener(\'seeked\', onSeeked, { once: true });\nsetTimeout(onSeeked, timeoutMs); // reimplemented ~5-6 times with small variations',
+      fix:'Extract a single seekAndWait(el, time, timeoutMs) promise helper and use it at all call sites.'},
+    {sev:'medium', cat:'Performance', title:'Per-chunk IPC copy cost for the full recording duration', files:['src/preload/preload.js:28-29','src/main/main.js:520-530'], effort:'L',
+      scenario:'sendVideoChunk/sendCamChunk use ipcRenderer.invoke, which structured-clones (fully copies) every ArrayBuffer chunk across the renderer↔main boundary. At a 250ms timeslice this is a continuous copy cost for the entire recording, scaling with bitrate and duration.',
+      evidence:"sendVideoChunk: (buf) => ipcRenderer.invoke('rec:videoChunk', buf), // structured-clone copy, not transferred",
+      fix:'This would require a different IPC transport (e.g. a MessagePort/streaming channel) to avoid the copy — worth doing only if profiling shows it as a real bottleneck relative to encode cost.'},
+    {sev:'medium', cat:'Performance', title:'All webcam/region compositing runs on the main thread via Canvas2D + rAF', files:['src/renderer/index.js:870-876','src/renderer/cam-processor.js:100-163'], effort:'L',
+      scenario:'Region-crop drawing and selfie-segmentation compositing both run as Canvas2D operations inside requestAnimationFrame on the main thread, with no OffscreenCanvas/Worker offload. Under load (4K region crop simultaneously with segmentation), this main-thread work competes with everything else the renderer is doing and risks dropped frames.',
+      evidence:'function draw() {\n  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, cw, ch); // main-thread Canvas2D, every rAF tick\n  requestAnimationFrame(draw);\n}',
+      fix:'Move compositing to an OffscreenCanvas in a Worker where feasible; MediaPipe\'s WASM/SIMD build may make this a larger effort than a quick win, hence the L rating.'},
+
+    // ---------------- LOW ----------------
+    {sev:'low', cat:'Bug', title:'Export temp-file cleanup has two gaps', files:['src/main/main.js:991','src/main/main.js:1013-1015'], effort:'S',
+      scenario:'The cancel branch calls fs.unlinkSync(tmpZoomed) with no try/catch (throws if the file is already gone), and tmpZoomed is written before the surrounding try/finally, so if showSaveDialog throws (not just cancels), the temp file leaks until the next app-start cleanup sweep.',
+      evidence:'fs.writeFileSync(tmpZoomed, Buffer.from(zoomedBuffer)); // before the try/finally below\n...\nif (canceled || !filePath) {\n  fs.unlinkSync(tmpZoomed); // no try/catch\n  return { canceled: true };\n}',
+      fix:'Wrap the write in the same try/finally that already guards the rest of the handler, and wrap the cancel-branch unlink in a try/catch.'},
+    {sev:'low', cat:'Bug', title:'arnndn model-path escaping does not cover single quotes', files:['src/main/ffmpeg-export.js:32-37'], effort:'S',
+      scenario:'The ffPath() helper used to quote the denoise model path only escapes backslashes and colons, not single quotes. A model/app path containing a single quote (unlikely in normal installs, but possible in some install-path edge cases) would break the quoted filtergraph literal. Not attacker-reachable — the path is fixed and internal, not renderer-supplied.',
+      evidence:"arnndn=m='${ffPath(modelPath)}' // ffPath escapes \\ and : only, not '",
+      fix:'Extend ffPath() to also escape single quotes for the filtergraph-literal context.'},
+    {sev:'low', cat:'Bug', title:'cursor-tracker discards in-flight samples on a double-start', files:['src/main/cursor-tracker.js:57'], effort:'S',
+      scenario:'startCursorTracking() calls stopCursorTracking() when already active but discards its returned samples/clicks before resetting. Harmless today only because the caller immediately reinitializes both arrays anyway; compounds the rec:start double-start finding if that\'s ever hit.',
+      evidence:'if (active) stopCursorTracking(); // return value discarded\nsamples = []; clicks = [];',
+      fix:'Low priority on its own; resolved as a side effect of fixing the rec:start session guard (see Critical finding).'},
+    {sev:'low', cat:'Bug', title:'Dialogs use mainWindow without an isDestroyed() guard', files:['src/main/main.js:405','src/main/main.js:1007'], effort:'S',
+      scenario:'dialog.showMessageBox/showSaveDialog pass mainWindow as the parent with no isDestroyed() check; mainWindow is also never nulled on \'closed\'. If the window is closed mid-flow, these calls could throw. Low practical risk since these handlers require a live renderer to invoke via IPC in the first place.',
+      evidence:'dialog.showSaveDialog(mainWindow, { ... }) // no isDestroyed() check',
+      fix:'Guard with `if (mainWindow && !mainWindow.isDestroyed())` before passing it as a dialog parent.'},
+    {sev:'low', cat:'Performance', title:'ffmpeg stderr accumulated in full though only the last 2000 chars are ever used', files:['src/main/ffmpeg-export.js:111-113','src/main/ffmpeg-export.js:123'], effort:'S',
+      scenario:'The stderr string grows for the entire process lifetime (even on success, where it\'s never read), while the failure path only ever uses stderr.slice(-2000). A very long/verbose export accumulates an unbounded string for no benefit.',
+      evidence:'let stderr = \'\';\nproc.stderr.on(\'data\', (d) => {\n  const s = d.toString();\n  stderr += s; // grows unbounded, even on success where it is never read\n  ...\n});\n// failure path is the only reader: stderr.slice(-2000)',
+      fix:'Keep only the trailing N characters as data arrives (a ring buffer or periodic truncation) instead of accumulating the full stream.'},
+    {sev:'low', cat:'Performance', title:'recordings:list does synchronous per-file readdirSync + statSync', files:['src/main/main.js:684-698'], effort:'S',
+      scenario:'Listing the recordings library does fs.readdirSync followed by a statSync/existsSync per file in a .map(), all synchronously on the main process — O(files) blocking I/O every time the library is opened.',
+      evidence:'const files = fs.readdirSync(RECORDINGS_DIR);\nconst list = files.map(f => { const stat = fs.statSync(...); ... }); // sync per file',
+      fix:'Switch to the async fs.promises equivalents and Promise.all the per-file stats.'},
+    {sev:'low', cat:'Refactoring', title:'STEREO filtergraph constant defined twice', files:['src/main/ffmpeg-export.js:189','src/main/ffmpeg-export.js:394'], effort:'S',
+      scenario:'The literal `aformat=sample_rates=48000:channel_layouts=stereo` is defined as a local STEREO constant independently in two functions.',
+      evidence:"const STEREO = 'aformat=sample_rates=48000:channel_layouts=stereo'; // defined twice",
+      fix:'Hoist to a single module-level constant.'},
+    {sev:'low', cat:'Refactoring', title:'probeHeight and probeHasAudio duplicate the same spawn/parse boilerplate', files:['src/main/ffmpeg-export.js:167-179','src/main/ffmpeg-export.js:479-488'], effort:'S',
+      scenario:'Both functions spawn ffmpeg, accumulate stderr into a buffer, and parse it on the close event — near-identical boilerplate for two different probes.',
+      evidence:'function probeHeight(file) { /* spawn, accumulate, parse on close */ }\nfunction probeHasAudio(file) { /* same shape, different regex */ }',
+      fix:'Extract a shared probeViaStderr(file, parseFn) helper and pass each a small parser.'},
+    {sev:'low', cat:'Refactoring', title:'source:import and source:importAudio are near-duplicate IPC handlers', files:['src/main/main.js:619-640','src/main/main.js:643-665'], effort:'S',
+      scenario:'Both handlers share the same open-dialog → probe → register-mediaSource loop structure, differing mainly in the dialog filter and probe function used.',
+      evidence:"ipcMain.handle('source:import', async () => { /* dialog, loop, probe */ });\nipcMain.handle('source:importAudio', async () => { /* same shape */ });",
+      fix:'Extract a shared importSourceFiles(filters, probeFn) helper parameterized by media type.'},
+    {sev:'low', cat:'Refactoring', title:'showRecFrame and showSceneIndicator duplicate a large overlay-window config block', files:['src/main/main.js:248-286','src/main/main.js:327-366'], effort:'S',
+      scenario:'Both functions repeat the same large set of BrowserWindow options for a transparent, click-through, always-on-top overlay (frame, transparent, hasShadow, resizable, movable, contentProtection, visibleOnAllWorkspaces, etc).',
+      evidence:'new BrowserWindow({ frame: false, transparent: true, hasShadow: false, resizable: false, ... }) // repeated verbatim in both functions',
+      fix:'Extract a createOverlayWindow(options) factory shared by both.'},
+    {sev:'low', cat:'Refactoring', title:'Scene indicator updated via executeJavaScript string injection instead of IPC', files:['src/main/main.js:369-372'], effort:'S',
+      scenario:'updateSceneIndicator() calls webContents.executeJavaScript with a template-string-built call rather than using the preload/IPC channel used everywhere else. Low actual risk since `scene` is always one of the fixed SCENE_KEYS enum values, but it\'s an anti-pattern relative to the rest of the codebase\'s IPC conventions.',
+      evidence:"sceneIndicatorWin.webContents.executeJavaScript(`window.setScene && window.setScene(${JSON.stringify(scene)})`);",
+      fix:'Expose a small preload API on the scene-indicator window and send via ipcRenderer/webContents.send instead.'},
+    {sev:'low', cat:'Refactoring', title:'Dead exports in ffmpeg-export.js', files:['src/main/ffmpeg-export.js:490'], effort:'S',
+      scenario:'module.exports includes ffmpegPath and modelPath; main.js only destructures exportVideo, exportCleanAudio, and probeHasAudio, and no other file in the repo requires ffmpeg-export.js — the two extra exports are unused.',
+      evidence:'module.exports = { exportVideo, exportCleanAudio, probeHasAudio, ffmpegPath, modelPath }; // last two unused',
+      fix:'Remove the unused exports.'},
+    {sev:'low', cat:'Leak', title:'SelfieSegmentation instance is never closed', files:['src/renderer/cam-processor.js:34-46','src/renderer/cam-processor.js:67-74'], effort:'S',
+      scenario:'stop() releases the webcam MediaStream tracks but never calls .close() on the MediaPipe SelfieSegmentation instance, leaving its WASM/GPU resources allocated for the life of the app.',
+      evidence:'async stop() {\n  this.running = false;\n  if (this.rawStream) { ...tracks stopped... }\n  this.video.srcObject = null;\n  // this.seg (SelfieSegmentation instance) is never .close()d anywhere\n}',
+      fix:'Call this.seg.close() when the camera processor is torn down for good (not on every preview stop/start, just app-level teardown).'},
+    {sev:'low', cat:'Performance', title:'pendingWrites[] grows unbounded until the recording stops', files:['src/renderer/index.js:65','src/renderer/index.js:1118-1119'], effort:'S',
+      scenario:'Every chunk write promise is pushed into pendingWrites and only cleared in onRecordingStopped via Promise.all + reset. At ~4-8 pushes/sec (main + cam recorders, 250ms timeslice) a one-hour recording accumulates roughly 14,000-28,000 promise references before being cleared.',
+      evidence:'pendingWrites.push(p); // cleared only at recording stop\n// ~4-8 pushes/sec × recording duration',
+      fix:'Periodically drain/reset pendingWrites in batches during a long recording instead of only at the end (low urgency — promise objects are small, but unnecessary).'},
+    {sev:'low', cat:'Bug', title:'Webcam recorder fps is hardcoded in screen mode but user-selected in camera mode', files:['src/renderer/index.js:900','src/renderer/index.js:1046'], effort:'S',
+      scenario:'camProcessor.recordStream(fps) uses the user-selected fps in camera mode (line 900) but is hardcoded to recordStream(30) in screen mode (line 1046) — an inconsistency that can cause an unexpected fps/quality mismatch between the two capture modes.',
+      evidence:'// camera mode:\ncamProcessor.recordStream(fps);\n// screen mode:\ncamProcessor.recordStream(30); // hardcoded, ignores the user\'s fps selection',
+      fix:'Use the same selected `fps` value in both code paths.'},
+    {sev:'low', cat:'Refactoring', title:'startCameraModePreview and startCamPreview are near-duplicate functions', files:['src/renderer/index.js:498-511','src/renderer/index.js:627-645'], effort:'S',
+      scenario:'Both functions follow the same camProcessor.start() → set camPreviewOn → clear status → check blur-availability → catch-and-set-error shape, differing only in preview-box visibility toggling and which device-id source they read from.',
+      evidence:'async function startCameraModePreview() { /* start, flag, status, catch */ }\nasync function startCamPreview() { /* same shape */ }',
+      fix:'Extract the shared start/status/error logic into one helper parameterized by the visibility side-effect.'},
+    {sev:'low', cat:'Refactoring', title:'Device-select populate pattern repeated across 4 dropdowns, inconsistently', files:['src/renderer/index.js:259-264','src/renderer/index.js:486-490','src/renderer/index.js:528-533','src/renderer/index.js:541-546'], effort:'S',
+      scenario:'The "clear select, loop devices, append option" pattern repeats across source/camera/mic/speaker population, but only two of the four instances also restore the previously-selected id — the other two silently reset selection on refresh, an inconsistency as much as a duplication issue.',
+      evidence:'select.innerHTML = \'\';\ndevices.forEach(d => { const opt = document.createElement(\'option\'); ...; select.appendChild(opt); });\n// only 2 of 4 call sites also restore `prevId` afterward',
+      fix:'Extract one populateSelect(select, items, { restorePrevious }) helper and apply prevId-restoration consistently across all four.'},
+    {sev:'low', cat:'Refactoring', title:'Top-level confirm()/cancel() functions shadow window.confirm', files:['src/renderer/region-overlay.js:61','src/renderer/region-overlay.js:71'], effort:'S',
+      scenario:'region-overlay.js declares top-level `function confirm()` and `function cancel()` in a classic (non-module) script, which shadows the native window.confirm globally in that window. Nothing in the file currently calls the native dialog, so it\'s a naming hazard rather than a live bug.',
+      evidence:"function confirm() { /* shadows window.confirm */ }\nfunction cancel() { ... }",
+      fix:'Rename to confirmSelection()/cancelSelection() (or similar) to avoid shadowing browser globals.'},
+    {sev:'low', cat:'Refactoring', title:'Pervasive magic numbers with no named constants', files:['src/renderer/index.js: multiple'], effort:'S',
+      scenario:'Bitrate clamps (1_500_000 / 40_000_000), preview downscale dimensions (1280/720/10fps), analyser fftSize (512), RMS scale factor (×3), the fps+0.5 throttle interval, and the 250ms MediaRecorder timeslice/timer interval all appear as bare literals with no named constant explaining the choice.',
+      evidence:'const bitrate = Math.round(Math.min(40_000_000, Math.max(1_500_000, raw))); // index.js:151\nanalyser.fftSize = 512;      // index.js:600\nmediaRecorder.start(250);    // index.js:929 / 1083',
+      fix:'Hoist to named constants at the top of the file with a short comment on why each value was chosen — mostly a readability improvement, not a functional bug.'},
+    {sev:'low', cat:'Refactoring', title:'Cover-fit ("center-crop") math duplicated between two draw functions', files:['src/renderer/editor.js:441-447','src/renderer/editor.js:754-763'], effort:'S',
+      scenario:'drawElementCover and the full-frame branch of drawCamFull both independently compute the same `cover = Math.max(W/vw, H/vh)` center-crop rectangle. (A third, visually related function, drawCam\'s circular PiP crop, uses a genuinely different square center-crop formula and is not a duplicate of this pair.)',
+      evidence:'const cover = Math.max(W / vw, H / vh);\nconst dw = vw * cover, dh = vh * cover; // duplicated in two functions',
+      fix:'Extract a coverFitRect(vw, vh, W, H) helper shared by both.'},
+    {sev:'low', cat:'Refactoring', title:'Two separate keydown listeners for modal vs. edit shortcuts', files:['src/renderer/editor.js:2957-2962','src/renderer/editor.js:2967-3026'], effort:'S',
+      scenario:'Two independent window "keydown" listeners are registered — one handling the help-modal Escape/"?" toggle, one handling all editing shortcuts — splitting related keyboard-handling logic across two registrations with implicit ordering.',
+      evidence:"window.addEventListener('keydown', (e) => { /* modal escape/help */ });\nwindow.addEventListener('keydown', (e) => { /* edit shortcuts */ });",
+      fix:'Unify into a single keydown handler with an internal keymap, or at minimum document why they\'re split.'}
+  ];
+
+  F.forEach(function (f, i) { f.rank = i + 1; f.id = 'f' + (i + 1); });
+
+  var SEV_LABEL = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
+
+  // ---------- Category bar ----------
+  (function renderCatBar() {
+    var counts = {};
+    F.forEach(function (f) { counts[f.cat] = (counts[f.cat] || 0) + 1; });
+    var cats = Object.keys(counts);
+    var bar = document.getElementById('catBar');
+    var legend = document.getElementById('catLegend');
+    cats.forEach(function (c) {
+      var pct = (counts[c] / F.length * 100).toFixed(2);
+      var seg = document.createElement('div');
+      seg.style.width = pct + '%';
+      seg.style.background = CAT_COLORS[c] || 'var(--muted)';
+      seg.title = c + ': ' + counts[c];
+      bar.appendChild(seg);
+
+      var sw = document.createElement('span');
+      sw.className = 'sw';
+      sw.innerHTML = '<span class="dot" style="background:' + (CAT_COLORS[c] || 'var(--muted)') + '"></span>' + c + ' · ' + counts[c];
+      legend.appendChild(sw);
+    });
+  })();
+
+  // ---------- Table render ----------
+  var tbody = document.getElementById('tableBody');
+  var emptyState = document.getElementById('emptyState');
+  var resultCount = document.getElementById('resultCount');
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function buildRow(f) {
+    var main = document.createElement('tr');
+    main.className = 'row-main';
+    main.dataset.id = f.id;
+    main.innerHTML =
+      '<td class="col-rank">' + f.rank + '</td>' +
+      '<td class="col-sev"><span class="sev-pill ' + f.sev + '">' + SEV_LABEL[f.sev] + '</span></td>' +
+      '<td class="col-cat">' + f.cat + '</td>' +
+      '<td class="col-title">' + escapeHtml(f.title) + '</td>' +
+      '<td class="col-loc">' + escapeHtml(f.files[0]) + (f.files.length > 1 ? ' <span title="' + escapeHtml(f.files.slice(1).join(', ')) + '">+' + (f.files.length - 1) + '</span>' : '') + '</td>' +
+      '<td class="col-effort">' + f.effort + '</td>' +
+      '<td class="col-chevron">&#8250;</td>';
+
+    var detail = document.createElement('tr');
+    detail.className = 'detail-row hidden';
+    detail.innerHTML =
+      '<td colspan="7"><div class="detail-inner">' +
+        '<div class="detail-block"><h4>Failure scenario</h4><p>' + escapeHtml(f.scenario) + '</p></div>' +
+        '<div class="detail-block fix-block"><h4>Recommended fix</h4><p>' + escapeHtml(f.fix) + '</p></div>' +
+        '<div class="detail-block full"><h4>Evidence — ' + f.files.map(escapeHtml).join(', ') + '</h4><pre class="evidence">' + escapeHtml(f.evidence) + '</pre></div>' +
+      '</div></td>';
+
+    main.addEventListener('click', function () {
+      var isHidden = detail.classList.contains('hidden');
+      detail.classList.toggle('hidden');
+      main.classList.toggle('expanded', isHidden);
+    });
+
+    return [main, detail];
+  }
+
+  F.forEach(function (f) {
+    var rows = buildRow(f);
+    tbody.appendChild(rows[0]);
+    tbody.appendChild(rows[1]);
+  });
+
+  // ---------- Filtering ----------
+  var state = { sev: 'all', cat: 'all', q: '' };
+
+  function applyFilters() {
+    var visible = 0;
+    F.forEach(function (f) {
+      var matchSev = state.sev === 'all' || f.sev === state.sev;
+      var matchCat = state.cat === 'all' || f.cat === state.cat;
+      var haystack = (f.title + ' ' + f.files.join(' ') + ' ' + f.scenario + ' ' + f.fix).toLowerCase();
+      var matchQ = !state.q || haystack.indexOf(state.q) !== -1;
+      var show = matchSev && matchCat && matchQ;
+      var mainRow = tbody.querySelector('tr[data-id="' + f.id + '"]');
+      var detailRow = mainRow.nextElementSibling;
+      mainRow.style.display = show ? '' : 'none';
+      if (!show) { detailRow.classList.add('hidden'); mainRow.classList.remove('expanded'); }
+      detailRow.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    resultCount.textContent = visible + ' of ' + F.length + ' shown';
+    emptyState.classList.toggle('hidden', visible !== 0);
+  }
+
+  document.getElementById('sevChips').addEventListener('click', function (e) {
+    var btn = e.target.closest('.chip');
+    if (!btn) return;
+    state.sev = btn.dataset.sevFilter;
+    this.querySelectorAll('.chip').forEach(function (c) { c.classList.toggle('active', c === btn); });
+    applyFilters();
+  });
+
+  document.getElementById('catChips').addEventListener('click', function (e) {
+    var btn = e.target.closest('.chip');
+    if (!btn) return;
+    state.cat = btn.dataset.catFilter;
+    this.querySelectorAll('.chip').forEach(function (c) { c.classList.toggle('active', c === btn); });
+    applyFilters();
+  });
+
+  document.getElementById('searchBox').addEventListener('input', function (e) {
+    state.q = e.target.value.trim().toLowerCase();
+    applyFilters();
+  });
+
+  document.getElementById('statGrid').addEventListener('click', function (e) {
+    var tile = e.target.closest('.stat-tile');
+    if (!tile) return;
+    var sev = tile.dataset.sev || 'all';
+    state.sev = sev;
+    document.querySelectorAll('#sevChips .chip').forEach(function (c) {
+      c.classList.toggle('active', (c.dataset.sevFilter || 'all') === sev);
+    });
+    document.querySelectorAll('#statGrid .stat-tile').forEach(function (t) { t.classList.remove('active'); });
+    tile.classList.add('active');
+    applyFilters();
+    document.querySelector('.filter-bar').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  applyFilters();
+})();
+</script>
+</body>
+</html>

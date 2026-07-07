@@ -19,6 +19,17 @@ const PROJECTS_DIR = path.join(RECORDINGS_DIR, 'Projects');
 const PROJECT_ASSETS_DIR = path.join(PROJECTS_DIR, 'assets');
 const PROJECT_EXT = 'ssproj';
 
+// Origin of our own renderer pages (index.html, editor.html, ...), used to scope
+// the permission handler and the navigation guard below to content we actually
+// ship — defense-in-depth in case a future change ever loads remote content.
+const RENDERER_ORIGIN = pathToFileURL(path.join(__dirname, '..', 'renderer')).href + '/';
+
+function isPathInside(candidate, dir) {
+  const resolvedDir = path.resolve(dir);
+  const resolved = path.resolve(candidate);
+  return resolved === resolvedDir || resolved.startsWith(resolvedDir + path.sep);
+}
+
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
@@ -61,6 +72,14 @@ function screenAccessStatus() {
 }
 
 let mainWindow = null;
+
+// mainWindow is never explicitly nulled on 'closed', so a dialog() call made
+// in a gap after the window closes (but before its handlers finish) could
+// otherwise pass a destroyed BrowserWindow as the parent. Use this instead of
+// `mainWindow` directly everywhere a native dialog needs a parent.
+function dialogParent() {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+}
 
 // Global hotkey to start/stop recording (works even when unfocused).
 const RECORD_SHORTCUT = 'CommandOrControl+Shift+R';
@@ -142,6 +161,15 @@ function createWindow() {
   });
   wc.on('zoom-changed', () => { wc.setZoomLevel(0); });
   wc.on('did-finish-load', () => { wc.setZoomLevel(0); wc.setZoomFactor(1); });
+
+  // Defense-in-depth: this window only ever shows our own local pages and never
+  // opens links or navigates elsewhere, but with no guard here a stray/injected
+  // link could pop an arbitrary external window or navigate the app shell away
+  // from itself. Deny/block by default.
+  wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+  wc.on('will-navigate', (e, url) => {
+    if (!url.startsWith(RENDERER_ORIGIN)) e.preventDefault();
+  });
 
   // If the main window closes mid-recording, tear down the always-on-top overlay
   // windows so they don't keep the app alive (blocking 'window-all-closed').
@@ -245,14 +273,21 @@ ipcMain.handle('region:select', async (_evt, { display, aspect }) => {
 // ---------------------------------------------------------------------------
 let recFrameWin = null;
 
-function showRecFrame(display, region) {
-  hideRecFrame();
-  const b = display.bounds;
+// Shared config for a transparent, click-through, always-on-top, capture-
+// excluded overlay window — used by both the recording-frame outline and the
+// scene indicator badge below, which used to repeat this whole options object
+// verbatim. `extra` lets a caller override/add BrowserWindow options.
+function createOverlayWindow(bounds, extra = {}) {
+  // Pull webPreferences out of `extra` and MERGE it into the secure base rather
+  // than letting the top-level spread replace it wholesale — so a caller adding
+  // (say) a preload doesn't have to restate contextIsolation/nodeIntegration,
+  // and a future tightening of the base default here can't be silently shadowed.
+  const { webPreferences: extraWebPrefs, ...restExtra } = extra;
   const win = new BrowserWindow({
-    x: b.x,
-    y: b.y,
-    width: b.width,
-    height: b.height,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
     frame: false,
     transparent: true,
     hasShadow: false,
@@ -262,19 +297,22 @@ function showRecFrame(display, region) {
     maximizable: false,
     fullscreenable: false,
     skipTaskbar: true,
-    focusable: false, // never steals focus from the app being recorded
+    focusable: false, // never steals focus from the app being recorded/captured
     alwaysOnTop: true,
-    enableLargerThanScreen: true,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
+    ...restExtra,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, ...extraWebPrefs },
   });
-
   win.setIgnoreMouseEvents(true); // clicks pass straight through to apps below
-  win.setContentProtection(true); // keep the outline out of the capture
+  win.setContentProtection(true); // keep it out of the capture
   win.setAlwaysOnTop(true, 'screen-saver');
   if (isMac) win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreenWindows: true });
+  return win;
+}
+
+function showRecFrame(display, region) {
+  hideRecFrame();
+  const b = display.bounds;
+  const win = createOverlayWindow(b, { enableLargerThanScreen: true });
   win.setBounds(b);
 
   const query = {
@@ -333,28 +371,14 @@ function showSceneIndicator(display, scene, region) {
     ? { x: b.x + region.x, y: b.y + region.y, w: region.w, h: region.h }
     : { x: b.x, y: b.y, w: b.width, h: b.height };
   const W = 150; const H = 40;
-  const win = new BrowserWindow({
-    x: Math.round(area.x + (area.w - W) / 2),
-    y: Math.round(area.y + 14),
-    width: W,
-    height: H,
-    frame: false,
-    transparent: true,
-    hasShadow: false,
-    resizable: false,
-    movable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    skipTaskbar: true,
-    focusable: false,
-    alwaysOnTop: true,
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
-  });
-  win.setIgnoreMouseEvents(true);
-  win.setContentProtection(true); // keep the badge out of the capture
-  win.setAlwaysOnTop(true, 'screen-saver');
-  if (isMac) win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreenWindows: true });
+  const win = createOverlayWindow(
+    { x: Math.round(area.x + (area.w - W) / 2), y: Math.round(area.y + 14), width: W, height: H },
+    // contextIsolation/nodeIntegration come from createOverlayWindow's secure
+    // base now (merged, not overwritten) — only the preload is caller-specific.
+    { webPreferences: {
+      preload: path.join(__dirname, '..', 'preload', 'scene-indicator-preload.js'),
+    } },
+  );
   win.loadFile(path.join(__dirname, '..', 'renderer', 'scene-indicator.html'), { query: { scene } });
   // Re-apply the current scene once the page's script is ready, so a switch that
   // fires before load doesn't leave the badge stale.
@@ -366,9 +390,7 @@ function showSceneIndicator(display, scene, region) {
 }
 function updateSceneIndicator(scene) {
   if (!sceneIndicatorWin || sceneIndicatorWin.isDestroyed()) return;
-  sceneIndicatorWin.webContents.executeJavaScript(
-    `window.setScene && window.setScene(${JSON.stringify(scene)})`
-  ).catch(() => {});
+  sceneIndicatorWin.webContents.send('scene:update', scene);
 }
 function hideSceneIndicator() {
   if (sceneIndicatorWin) {
@@ -402,7 +424,7 @@ ipcMain.handle('screen:ensure', async () => {
     ? `افتح إعدادات النظام ← الخصوصية والأمان ← تسجيل الشاشة وفعّل «Electron»، ثم أغلق التطبيق وأعد فتحه.\n\n(أثناء التطوير يكون البرنامج العامل هو Electron، لذا يظهر الإدخال باسم «Electron» وليس «${appName}».)`
     : `افتح إعدادات النظام ← الخصوصية والأمان ← تسجيل الشاشة وفعّل «${appName}»، ثم أغلق التطبيق وأعد فتحه.`;
 
-  const { response } = await dialog.showMessageBox(mainWindow, {
+  const { response } = await dialog.showMessageBox(dialogParent(), {
     type: 'warning',
     buttons: ['فتح إعدادات النظام', 'إلغاء'],
     defaultId: 0,
@@ -470,7 +492,50 @@ function endStream(stream) {
   });
 }
 
+// Write one chunk, honoring the stream's backpressure. If write() returns false
+// we must wait before acknowledging the next chunk — but waiting on 'drain'
+// ALONE can hang forever: if the stream is destroyed while we're waiting (e.g.
+// discardSession() tears down an abandoned session, or the cam/export capture is
+// aborted mid-flight), 'drain' never fires, this promise never settles, and the
+// renderer's chunk-write chain wedges silently. destroy() DOES emit 'close'
+// (and 'error' on failure), so resolve on any of the three and detach the rest.
+function writeChunkBackpressured(stream, buffer) {
+  if (stream.write(buffer)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      stream.removeListener('drain', done);
+      stream.removeListener('close', done);
+      stream.removeListener('error', done);
+      resolve();
+    };
+    stream.once('drain', done);
+    stream.once('close', done);
+    stream.once('error', done);
+  });
+}
+
+// Best-effort teardown of an abandoned session: destroys its write streams and
+// removes whatever partial files it had started, without touching the cursor
+// tracker / scene shortcuts (the caller decides whether those still apply).
+function discardSession(s) {
+  try { s.videoStream.destroy(); } catch (_) {}
+  try { if (s.camStream) s.camStream.destroy(); } catch (_) {}
+  try { fs.unlinkSync(s.videoPath); } catch (_) {}
+  try { if (s.camStream) fs.unlinkSync(s.camPath); } catch (_) {}
+}
+
 ipcMain.handle('rec:start', async (_evt, { display, kind, region, scene, transition }) => {
+  if (recSession) {
+    // The renderer's own state machine should prevent this, but guard here too:
+    // overwriting `recSession` while one is already live would leak its write
+    // stream and orphan its partial file (see the "arming race" finding).
+    console.warn('rec:start called with an active recSession — discarding the stale one first');
+    stopCursorTracking();
+    unregisterSceneShortcuts();
+    hideSceneIndicator();
+    discardSession(recSession);
+    recSession = null;
+  }
   const recBaseEpoch = Date.now();
   // Camera mode has no display; default to the primary so project fields stay valid.
   if (!display) display = screen.getPrimaryDisplay();
@@ -518,14 +583,39 @@ ipcMain.handle('rec:start', async (_evt, { display, kind, region, scene, transit
 });
 
 ipcMain.handle('rec:videoChunk', async (_evt, buffer) => {
-  if (recSession && recSession.videoStream) recSession.videoStream.write(Buffer.from(buffer));
+  if (recSession && recSession.videoStream) {
+    // Honor the stream's backpressure signal: if disk I/O falls behind a
+    // high-bitrate capture, wait before acknowledging the next chunk instead of
+    // letting Node buffer writes in memory unboundedly.
+    await writeChunkBackpressured(recSession.videoStream, Buffer.from(buffer));
+  }
   return { ok: true };
 });
 
 ipcMain.handle('rec:camChunk', async (_evt, buffer) => {
   if (!recSession) return { ok: false };
+  // The cam encoder can have errored and been dropped (rec:dropCam) while a
+  // chunk was already in flight — don't recreate the stream we just deleted.
+  if (recSession.camDropped) return { ok: false };
   if (!recSession.camStream) recSession.camStream = fs.createWriteStream(recSession.camPath);
-  recSession.camStream.write(Buffer.from(buffer));
+  await writeChunkBackpressured(recSession.camStream, Buffer.from(buffer));
+  return { ok: true };
+});
+
+// The renderer's webcam encoder failed mid-recording; abandon the (now truncated)
+// cam track entirely so the finished recording is cleanly screen-only, matching
+// what the user was told on screen. Screen capture is untouched and keeps writing.
+ipcMain.handle('rec:dropCam', async () => {
+  if (!recSession) return { ok: false };
+  const s = recSession;
+  s.camDropped = true;
+  if (s.camStream) {
+    // Any in-flight rec:camChunk awaiting backpressure resolves on 'close' (see
+    // writeChunkBackpressured), so destroying here can't wedge the renderer.
+    try { s.camStream.destroy(); } catch (_) {}
+    s.camStream = null;
+  }
+  try { fs.unlinkSync(s.camPath); } catch (_) {}
   return { ok: true };
 });
 
@@ -585,13 +675,7 @@ ipcMain.handle('rec:abort', async () => {
   hideSceneIndicator();
   const s = recSession;
   recSession = null;
-  if (s) {
-    try { s.videoStream.destroy(); } catch (_) {}
-    try { if (s.camStream) s.camStream.destroy(); } catch (_) {}
-    // Best-effort cleanup of the partial files.
-    try { fs.unlinkSync(s.videoPath); } catch (_) {}
-    try { if (s.camStream) fs.unlinkSync(s.camPath); } catch (_) {}
-  }
+  if (s) discardSession(s);
   return { ok: true };
 });
 
@@ -616,53 +700,50 @@ ipcMain.handle('studio:open', async () => {
 
 // Let the user pick one or more video files to add to the timeline. Each becomes
 // a registered media source; the editor creates a clip per file.
-ipcMain.handle('source:import', async () => {
-  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
-    title: 'إضافة فيديو',
+// Shared dialog -> probe -> register-source loop for source:import and
+// source:importAudio, which differed only in the dialog config, the probe's
+// fallback default, and whether an audio-less file is skipped entirely.
+async function importSourceFiles({ title, filters, defaultHasAudio, skipIfNoAudio }) {
+  const { canceled, filePaths } = await dialog.showOpenDialog(dialogParent(), {
+    title,
     properties: ['openFile', 'multiSelections'],
-    filters: [
-      { name: 'ملفات الفيديو', extensions: ['mp4', 'mov', 'webm', 'mkv', 'm4v', 'avi'] },
-      { name: 'كل الملفات', extensions: ['*'] },
-    ],
+    filters,
   });
   if (canceled || !filePaths.length) return [];
 
   const out = [];
   for (const p of filePaths) {
     if (!fs.existsSync(p)) continue;
-    const id = `imp_${importSeq++}`;
-    let hasAudio = false;
+    let hasAudio = defaultHasAudio;
     try { hasAudio = await probeHasAudio(p); } catch (_) {}
+    if (skipIfNoAudio && !hasAudio) continue; // no audio stream — nothing to add
+    const id = `imp_${importSeq++}`;
     mediaSources[id] = { path: p, hasAudio, kind: 'import' };
     out.push({ id, url: pathToFileUrl(p), name: path.basename(p), hasAudio });
   }
   return out;
-});
+}
+
+ipcMain.handle('source:import', async () => importSourceFiles({
+  title: 'إضافة فيديو',
+  filters: [
+    { name: 'ملفات الفيديو', extensions: ['mp4', 'mov', 'webm', 'mkv', 'm4v', 'avi'] },
+    { name: 'كل الملفات', extensions: ['*'] },
+  ],
+  defaultHasAudio: false,
+  skipIfNoAudio: false,
+}));
 
 // Import audio files (voice notes / music) as timeline audio sources.
-ipcMain.handle('source:importAudio', async () => {
-  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
-    title: 'إضافة ملف صوتي',
-    properties: ['openFile', 'multiSelections'],
-    filters: [
-      { name: 'ملفات الصوت', extensions: ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'opus', 'flac', 'webm'] },
-      { name: 'كل الملفات', extensions: ['*'] },
-    ],
-  });
-  if (canceled || !filePaths.length) return [];
-
-  const out = [];
-  for (const p of filePaths) {
-    if (!fs.existsSync(p)) continue;
-    let hasAudio = true;
-    try { hasAudio = await probeHasAudio(p); } catch (_) {}
-    if (!hasAudio) continue; // no audio stream — nothing to add
-    const id = `imp_${importSeq++}`;
-    mediaSources[id] = { path: p, hasAudio: true, kind: 'import' };
-    out.push({ id, url: pathToFileUrl(p), name: path.basename(p), hasAudio: true });
-  }
-  return out;
-});
+ipcMain.handle('source:importAudio', async () => importSourceFiles({
+  title: 'إضافة ملف صوتي',
+  filters: [
+    { name: 'ملفات الصوت', extensions: ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'opus', 'flac', 'webm'] },
+    { name: 'كل الملفات', extensions: ['*'] },
+  ],
+  defaultHasAudio: true,
+  skipIfNoAudio: true,
+}));
 
 // Save a recorded voice-over blob to a temp file and register it as an audio
 // source so the export can resolve its path (like an imported clip).
@@ -680,28 +761,39 @@ ipcMain.handle('voiceover:save', async (_evt, buffer) => {
 // List previously saved recordings (newest first).
 ipcMain.handle('recordings:list', async () => {
   ensureDir(RECORDINGS_DIR);
-  const files = fs
-    .readdirSync(RECORDINGS_DIR)
-    .filter((f) => f.endsWith('.webm') && !f.endsWith('.cam.webm'));
+  const fsp = fs.promises;
+  const allFiles = await fsp.readdir(RECORDINGS_DIR);
+  const files = allFiles.filter((f) => f.endsWith('.webm') && !f.endsWith('.cam.webm'));
 
-  const list = files.map((f) => {
+  const list = await Promise.all(files.map(async (f) => {
     const videoPath = path.join(RECORDINGS_DIR, f);
-    const stat = fs.statSync(videoPath);
     const camPath = videoPath.replace(/\.webm$/, '.cam.webm');
+    // stat() and the cam-existence check touch different, independent files —
+    // run them concurrently so each recording costs one round-trip, not two.
+    const [stat, hasCam] = await Promise.all([
+      fsp.stat(videoPath),
+      fsp.access(camPath).then(() => true, () => false),
+    ]);
     return {
       videoPath,
       name: f,
       mtime: stat.mtimeMs,
       sizeMB: +(stat.size / (1024 * 1024)).toFixed(1),
-      hasCam: fs.existsSync(camPath),
+      hasCam,
     };
-  });
+  }));
   list.sort((a, b) => b.mtime - a.mtime);
   return list;
 });
 
 // Re-open a saved recording in the editor.
 ipcMain.handle('recordings:open', async (_evt, videoPath) => {
+  // This handler only ever legitimately opens one of OUR OWN previously-recorded
+  // files (as listed by recordings:list) — confine it to RECORDINGS_DIR so a
+  // renderer-supplied path can't reach an arbitrary file elsewhere on disk.
+  if (typeof videoPath !== 'string' || !isPathInside(videoPath, RECORDINGS_DIR)) {
+    throw new Error('Invalid recording path');
+  }
   if (!fs.existsSync(videoPath)) throw new Error('Recording not found');
   const cursorPath = videoPath.replace(/\.webm$/, '.cursor.json');
   const camPath = videoPath.replace(/\.webm$/, '.cam.webm');
@@ -870,7 +962,7 @@ ipcMain.handle('project:save', async (_evt, { edit, sources, saveAs }) => {
   let target = currentProjectFile;
   if (saveAs || !target) {
     ensureDir(PROJECTS_DIR);
-    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    const { canceled, filePath } = await dialog.showSaveDialog(dialogParent(), {
       title: 'حفظ المشروع',
       defaultPath: path.join(PROJECTS_DIR, defaultProjectName()),
       filters: [{ name: 'مشروع مشهد', extensions: [PROJECT_EXT] }],
@@ -903,7 +995,7 @@ ipcMain.handle('project:autosave', async (_evt, { edit, sources }) => {
 // edit-state for the editor to apply on load, then swap to the editor.
 ipcMain.handle('project:open', async () => {
   ensureDir(PROJECTS_DIR);
-  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+  const { canceled, filePaths } = await dialog.showOpenDialog(dialogParent(), {
     title: 'فتح مشروع',
     defaultPath: PROJECTS_DIR,
     properties: ['openFile'],
@@ -986,9 +1078,58 @@ ipcMain.handle('project:file', async () => {
 // ---------------------------------------------------------------------------
 // IPC: export
 // ---------------------------------------------------------------------------
-ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
-  const tmpZoomed = path.join(os.tmpdir(), `ssr-zoomed-${Date.now()}.webm`);
-  fs.writeFileSync(tmpZoomed, Buffer.from(zoomedBuffer));
+// The renderer streams its canvas capture to this temp file chunk-by-chunk
+// (mirroring the rec:videoChunk pattern) instead of buffering the whole capture
+// in renderer memory and sending it as one giant structured-clone IPC message
+// that then had to be written with a blocking fs.writeFileSync on this process.
+let exportCapture = null; // { path, stream }
+
+ipcMain.handle('export:beginCapture', async () => {
+  const p = path.join(os.tmpdir(), `ssr-zoomed-${Date.now()}.webm`);
+  exportCapture = { path: p, stream: fs.createWriteStream(p) };
+  return { ok: true };
+});
+
+ipcMain.handle('export:chunk', async (_evt, buffer) => {
+  if (!exportCapture) return { ok: false };
+  // Same backpressure-with-safe-teardown handling as recording chunks: if the
+  // capture is aborted (stream destroyed) mid-write, the await still resolves.
+  await writeChunkBackpressured(exportCapture.stream, Buffer.from(buffer));
+  return { ok: true };
+});
+
+ipcMain.handle('export:endCapture', async () => {
+  if (!exportCapture) return null;
+  const cap = exportCapture;
+  exportCapture = null;
+  await new Promise((resolve) => cap.stream.end(resolve));
+  return cap.path;
+});
+
+// Best-effort cleanup when the capture itself fails (e.g. the intermediate
+// MediaRecorder errored) — otherwise the open stream/temp file would leak.
+ipcMain.handle('export:abortCapture', async () => {
+  if (!exportCapture) return { ok: true };
+  const cap = exportCapture;
+  exportCapture = null;
+  try { cap.stream.destroy(); } catch (_) {}
+  try { fs.unlinkSync(cap.path); } catch (_) {}
+  return { ok: true };
+});
+
+ipcMain.handle('export:run', async (_evt, { zoomedVideoPath, options }) => {
+  // zoomedVideoPath is round-tripped from export:beginCapture, which always
+  // creates the file inside the OS temp dir. Validate it the same way
+  // recordings:open / file:reveal validate their renderer-supplied paths — a
+  // crafted payload must not turn the fs.unlinkSync (arbitrary-file-delete) or
+  // the ffmpeg -i input (arbitrary-file-read, muxed into the revealed output)
+  // below into a primitive over any file on disk.
+  if (typeof zoomedVideoPath !== 'string'
+      || !isPathInside(zoomedVideoPath, os.tmpdir())
+      || !fs.existsSync(zoomedVideoPath)) {
+    throw new Error('Invalid export capture path');
+  }
+  const tmpZoomed = zoomedVideoPath;
 
   const format = options.format || 'mp4';
   const FILTERS = {
@@ -1004,14 +1145,14 @@ ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
     ? path.basename(currentProject.videoPath).replace(/\.webm$/, '')
     : 'mashhad-export';
   const defaultName = `${baseName}.${filter.extensions[0]}`;
-  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+  const { canceled, filePath } = await dialog.showSaveDialog(dialogParent(), {
     title: 'تصدير الفيديو',
     defaultPath: path.join(RECORDINGS_DIR, defaultName),
     filters: [filter],
   });
 
   if (canceled || !filePath) {
-    fs.unlinkSync(tmpZoomed);
+    try { fs.unlinkSync(tmpZoomed); } catch (_) {}
     return { canceled: true };
   }
 
@@ -1055,8 +1196,33 @@ ipcMain.handle('export:run', async (_evt, { zoomedBuffer, options }) => {
   return { ok: true, outputPath: filePath };
 });
 
-// Render the cleaned mic audio for in-editor preview (cached per profile).
-const audioPreviewCache = {}; // key `${videoPath}|${profile}` -> file path
+// Render the cleaned mic audio for in-editor preview (cached per profile). A
+// Map (not a plain object) so insertion order gives us LRU semantics for free.
+const audioPreviewCache = new Map(); // key `${videoPath}|${profile}|echo:${level}` -> file path
+// Concurrent calls for the same key (e.g. a settings toggle fired twice quickly)
+// await the same in-flight render instead of each spawning their own ffmpeg
+// process and racing to fill the cache slot, orphaning the loser's temp file.
+const audioPreviewInFlight = new Map(); // key -> Promise<url>
+const AUDIO_PREVIEW_CACHE_LIMIT = 12; // cap so a long session can't grow this unboundedly
+// The key most recently handed to the renderer. Its file is bound to a live
+// <audio> element in the editor, so eviction must never unlink it out from under
+// the playing preview — that would silently break "hear before export".
+let audioPreviewActiveKey = null;
+
+function evictAudioPreviewCache() {
+  while (audioPreviewCache.size > AUDIO_PREVIEW_CACHE_LIMIT) {
+    // Oldest-first, but skip the entry the renderer currently has loaded.
+    let victim = null;
+    for (const key of audioPreviewCache.keys()) {
+      if (key !== audioPreviewActiveKey) { victim = key; break; }
+    }
+    if (victim == null) break; // only the active entry is left above the limit — keep it
+    const p = audioPreviewCache.get(victim);
+    audioPreviewCache.delete(victim);
+    try { fs.unlinkSync(p); } catch (_) {}
+  }
+}
+
 ipcMain.handle('audio:preview', async (_evt, opts) => {
   // Back-compat: a bare string is the profile; the object form adds echoLevel.
   const profile = typeof opts === 'string' ? opts : (opts && opts.profile) || 'off';
@@ -1064,16 +1230,40 @@ ipcMain.handle('audio:preview', async (_evt, opts) => {
   // Nothing to render when neither cleanup is active.
   if (!currentProject || !currentProject.hasAudio || (profile === 'off' && echoLevel === 'off')) return null;
   const key = `${currentProject.videoPath}|${profile}|echo:${echoLevel}`;
-  if (audioPreviewCache[key] && fs.existsSync(audioPreviewCache[key])) {
-    return pathToFileUrl(audioPreviewCache[key]);
+
+  const cached = audioPreviewCache.get(key);
+  if (cached && fs.existsSync(cached)) {
+    audioPreviewCache.delete(key); // refresh LRU position
+    audioPreviewCache.set(key, cached);
+    audioPreviewActiveKey = key; // now bound to the renderer's <audio>
+    return pathToFileUrl(cached);
   }
-  const out = path.join(os.tmpdir(), `ssr-clean-${profile}-echo${echoLevel}-${Date.now()}.m4a`);
-  await exportCleanAudio({ inputPath: currentProject.videoPath, noiseProfile: profile, echoLevel, outputPath: out });
-  audioPreviewCache[key] = out;
-  return pathToFileUrl(out);
+
+  if (audioPreviewInFlight.has(key)) return audioPreviewInFlight.get(key);
+
+  const render = (async () => {
+    const out = path.join(os.tmpdir(), `ssr-clean-${profile}-echo${echoLevel}-${Date.now()}.m4a`);
+    await exportCleanAudio({ inputPath: currentProject.videoPath, noiseProfile: profile, echoLevel, outputPath: out });
+    audioPreviewCache.set(key, out);
+    evictAudioPreviewCache();
+    return pathToFileUrl(out);
+  })();
+  audioPreviewInFlight.set(key, render);
+  try {
+    const url = await render;
+    audioPreviewActiveKey = key; // now bound to the renderer's <audio>
+    return url;
+  } finally {
+    audioPreviewInFlight.delete(key);
+  }
 });
 
 ipcMain.handle('file:reveal', async (_evt, p) => {
+  // Unlike recordings:open, legitimate callers here also reveal an arbitrary
+  // export destination the user just picked via a native save dialog, so this
+  // can't be confined to one directory — just check it's a real, absolute path
+  // rather than passing arbitrary renderer-supplied input straight through.
+  if (typeof p !== 'string' || !path.isAbsolute(p) || !fs.existsSync(p)) return { ok: false };
   shell.showItemInFolder(p);
   return { ok: true };
 });
@@ -1120,9 +1310,14 @@ ipcMain.handle('settings:set', async (_evt, patch) => {
 // App lifecycle
 // ---------------------------------------------------------------------------
 app.whenReady().then(() => {
-  // Auto-grant media (mic) permission requests from our own renderer.
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(permission === 'media' || permission === 'audioCapture' || permission === 'display-capture');
+  // Auto-grant only the specific media permissions our own renderer pages need,
+  // and only when the request actually comes from one of our own pages — not a
+  // blanket grant to anything asking (defense-in-depth; all content is local
+  // today, but this stops a future change from silently widening the grant).
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) => {
+    const allowedPermission = permission === 'media' || permission === 'audioCapture' || permission === 'display-capture';
+    const fromOwnRenderer = !!(details && details.requestingUrl && details.requestingUrl.startsWith(RENDERER_ORIGIN));
+    callback(allowedPermission && fromOwnRenderer);
   });
 
   requestMacMediaAccess();
