@@ -54,6 +54,10 @@ function norm(e) {
 
 function startCursorTracking(recBaseEpoch, display, region) {
   if (!uIOhook) return;
+  // A double-start here would discard whatever stopCursorTracking() returns —
+  // harmless since samples/clicks are reset immediately below regardless, and
+  // main.js's rec:start now guards against ever reaching this with a session
+  // already active (see the stale-recSession check there).
   if (active) stopCursorTracking();
 
   recBase = recBaseEpoch;

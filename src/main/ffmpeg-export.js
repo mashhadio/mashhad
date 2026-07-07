@@ -26,11 +26,16 @@ function clickSfxFile(name) {
 }
 
 const MAX_CLICKS = 400; // cap filtergraph size
+const STEREO = 'aformat=sample_rates=48000:channel_layouts=stereo';
 
-// ffmpeg filtergraphs treat ':' as an option separator, so a Windows path must
-// have its colon and backslashes escaped.
+// ffmpeg filtergraphs treat ':' as an option separator, and this path is always
+// wrapped in single quotes (see arnndn() below) as a filtergraph-literal, so a
+// literal single quote in the path must also be escaped or it would terminate
+// the quoted literal early. Not attacker-reachable — `modelPath` is a fixed,
+// internal path — but a model/app install path with a quote in it would
+// otherwise just break the filtergraph.
 function ffPath(p) {
-  return p.replace(/\\/g, '/').replace(/:/g, '\\:');
+  return p.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "'\\''");
 }
 
 function arnndn() {
@@ -107,10 +112,15 @@ function run(args, onProgress) {
       return;
     }
     const proc = spawn(ffmpegPath, args, { windowsHide: true });
+    const STDERR_TAIL = 2000; // only the trailing chars are ever surfaced, on failure
     let stderr = '';
     proc.stderr.on('data', (d) => {
       const s = d.toString();
-      stderr += s;
+      // Keep only the trailing STDERR_TAIL chars as data arrives — the failure
+      // path only ever reads the tail, so accumulating the full stream for the
+      // whole process lifetime (even on success, where it's never read) served
+      // no purpose and grows unbounded on a long/verbose export.
+      stderr = (stderr + s).slice(-STDERR_TAIL);
       if (onProgress) {
         s.split(/\r|\n/).forEach((line) => {
           if (line.trim()) onProgress(line.trim());
@@ -120,7 +130,7 @@ function run(args, onProgress) {
     proc.on('error', reject);
     proc.on('close', (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`ffmpeg exited with code ${code}\n${stderr.slice(-2000)}`));
+      else reject(new Error(`ffmpeg exited with code ${code}\n${stderr}`));
     });
   });
 }
@@ -164,17 +174,25 @@ function youtubeVideoEncoder(height) {
 }
 
 // Read the pixel height of a video's first video stream.
-function probeHeight(filePath) {
+// Both probes below run ffmpeg with -i and no output, then parse information
+// out of the stderr banner it prints — the only difference between them is
+// what each is looking for, so they share this spawn/accumulate/parse-on-close
+// shape via `parseFn`.
+function probeViaStderr(filePath, fallback, parseFn) {
   return new Promise((resolve) => {
-    if (!ffmpegPath) return resolve(1080);
+    if (!ffmpegPath) return resolve(fallback);
     const proc = spawn(ffmpegPath, ['-hide_banner', '-i', filePath], { windowsHide: true });
     let out = '';
     proc.stderr.on('data', (d) => (out += d.toString()));
-    proc.on('error', () => resolve(1080));
-    proc.on('close', () => {
-      const m = out.match(/Video:.*?(\d{2,5})x(\d{2,5})/);
-      resolve(m ? parseInt(m[2], 10) : 1080);
-    });
+    proc.on('error', () => resolve(fallback));
+    proc.on('close', () => resolve(parseFn(out)));
+  });
+}
+
+function probeHeight(filePath) {
+  return probeViaStderr(filePath, 1080, (out) => {
+    const m = out.match(/Video:.*?(\d{2,5})x(\d{2,5})/);
+    return m ? parseInt(m[2], 10) : 1080;
   });
 }
 
@@ -186,7 +204,6 @@ function probeHeight(filePath) {
 // null when the whole timeline is silent. `addInput(path)` registers an ffmpeg
 // input and returns its index.
 function buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourceId, noiseChain, recordingAudioMuted) {
-  const STEREO = 'aformat=sample_rates=48000:channel_layouts=stereo';
   // A clip contributes audio unless its source is silent, or it's a recording
   // clip whose audio was detached (muted here; supplied by the detached clip).
   const clipHasAudio = (c) => {
@@ -260,6 +277,157 @@ function atempoChain(speed) {
   return factors.map((f) => `atempo=${f.toFixed(5)}`).join(',');
 }
 
+// ---- GIF: palette-based, silent — a self-contained path with none of the
+// audio-mixing concerns below. ----------------------------------------------
+async function exportGif({ zoomedVideoPath, resolution, outputPath, onProgress }) {
+  const fps = 15;
+  const gh = resolution && resolution !== 'original' ? parseInt(resolution, 10) : 600;
+  const scale = `fps=${fps},scale=-2:'min(${gh}\\,ih)':flags=lanczos`;
+  const args = [
+    '-y', '-i', zoomedVideoPath,
+    '-filter_complex', `[0:v]${scale},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3`,
+    '-loop', '0',
+    outputPath,
+  ];
+  await run(args, onProgress);
+  return outputPath;
+}
+
+// Pick the video/audio encoder args for the requested format/quality (and, for
+// "youtube", probe the source height to pick its recommended bitrate tier).
+async function pickEncoders(format, quality, resolution, zoomedVideoPath) {
+  const isMp4Container = format === 'mp4' || format === 'mov' || format === 'youtube' || format === 'master';
+  if (format === 'youtube') {
+    const h = resolution && resolution !== 'original' ? parseInt(resolution, 10) : await probeHeight(zoomedVideoPath);
+    return { vEnc: youtubeVideoEncoder(h), aEnc: ['-c:a', 'aac', '-b:a', '384k', '-ar', '48000', '-ac', '2'], isMp4Container };
+  }
+  if (format === 'master') {
+    // Near-visually-lossless H.264 — a clean source to re-edit (CapCut etc.)
+    // with lots of headroom so the next re-encode stays sharp.
+    return {
+      vEnc: ['-c:v', 'libx264', '-profile:v', 'high', '-pix_fmt', 'yuv420p', '-preset', 'slow', '-crf', '14'],
+      aEnc: ['-c:a', 'aac', '-b:a', '320k', '-ar', '48000', '-ac', '2'],
+      isMp4Container,
+    };
+  }
+  return { vEnc: videoEncoder(format, quality), aEnc: audioEncoder(format, quality), isMp4Container };
+}
+
+// The canvas capture already carries every visual (zoom, webcam, transitions,
+// scene composites) — this filtergraph fragment only applies the optional
+// output-resolution scale, producing [vout].
+function buildVideoFilterGraph(vf) {
+  return `[0:v]${vf || 'null'}[vout]`;
+}
+
+// Main-track voice, in one of two layouts (mirroring the video, which the
+// renderer already cut + reordered — this rebuilds the matching soundtrack):
+//   mono   — the pure-recording path (the common case): one mic input, denoised
+//            once over the whole concatenated voice.
+//   stereo — the mixed-source path: each clip pulls audio from its own source.
+// Pushes filtergraph fragments onto `parts` and registers inputs via
+// `addInput`; returns { voiceLabel, chLayout }.
+function buildAudioFilterGraph({ parts, addInput, cutSegs, sources, recordingSourceId, recPath, recHasAudio, pureRecording, noiseChain, recordingAudioMuted }) {
+  if (!pureRecording) {
+    return {
+      voiceLabel: buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourceId, noiseChain, recordingAudioMuted),
+      chLayout: 'stereo',
+    };
+  }
+  if (!recHasAudio) return { voiceLabel: null, chLayout: 'mono' };
+
+  const recIdx = addInput(recPath);
+  let src = `[${recIdx}:a]`;
+  if (cutSegs) {
+    const n = cutSegs.length;
+    const ins = [];
+    if (n === 1) {
+      ins.push(`[${recIdx}:a]`);
+    } else {
+      const splitOuts = cutSegs.map((_, i) => `[m${i}]`).join('');
+      parts.push(`[${recIdx}:a]asplit=${n}${splitOuts}`);
+      for (let i = 0; i < n; i++) ins.push(`[m${i}]`);
+    }
+    const labels = [];
+    cutSegs.forEach((s, i) => {
+      const tempo = atempoChain(s.speed);
+      parts.push(`${ins[i]}atrim=start=${(+s.start).toFixed(3)}:end=${(+s.end).toFixed(3)},asetpts=PTS-STARTPTS${tempo ? ',' + tempo : ''}[vc${i}]`);
+      labels.push(`[vc${i}]`);
+    });
+    parts.push(`${labels.join('')}concat=n=${n}:v=0:a=1[vcut]`);
+    src = '[vcut]';
+  }
+  const voiceChain = noiseChain ? noiseChain : 'aformat=sample_rates=48000:channel_layouts=mono';
+  parts.push(`${src}${voiceChain}[voice]`);
+  return { voiceLabel: '[voice]', chLayout: 'mono' };
+}
+
+// Overlay-track audio: each clip trimmed from its source, sped (atempo),
+// delayed to its timeline position, and formatted ready to fold into the final
+// mix. Returns the list of output labels (possibly empty).
+function buildOverlayAudioFilterGraph({ parts, addInput, overlayClips, sources, noiseChain }) {
+  const MAX_OVERLAY_AUDIO = 200; // bound the filtergraph size (cf. MAX_CLICKS)
+  const overlayLabels = [];
+  (Array.isArray(overlayClips) ? overlayClips : []).forEach((c, i) => {
+    const s = sources[c.sourceId];
+    if (!s || !s.hasAudio) return;               // silent overlay contributes nothing
+    if (!(+c.end > +c.start)) return;            // skip degenerate/zero-length clips
+    if (overlayLabels.length >= MAX_OVERLAY_AUDIO) return;
+    const idx = addInput(s.path);
+    const tempo = atempoChain(c.speed);
+    const den = c.voice && noiseChain ? ',' + noiseChain : ''; // denoise recorded voice-over
+    const vol = Math.max(0, Math.min(4, c.gain != null ? c.gain : 1)).toFixed(2);
+    const ms = Math.max(0, Math.round((c.pos || 0) * 1000));
+    const lbl = `[ov${i}]`;
+    parts.push(
+      `[${idx}:a]atrim=start=${(+c.start).toFixed(3)}:end=${(+c.end).toFixed(3)},asetpts=PTS-STARTPTS`
+      + `${den}${tempo ? ',' + tempo : ''},volume=${vol},adelay=${ms}|${ms},${STEREO}${lbl}`
+    );
+    overlayLabels.push(lbl);
+  });
+  return overlayLabels;
+}
+
+// Final mix: silent base + main voice + overlays + click SFX, amix'd together
+// when more than one contributes (overlays/clicks are always stereo-formatted,
+// so the mix upgrades to stereo whenever either is present). Returns the audio
+// label to -map (possibly just `voiceLabel` unchanged, or null if silent).
+function buildFinalMix({ parts, addInput, voiceLabel, overlayLabels, chLayout, useClicks, clicks, clickSoundName, clickVolume, durationSec }) {
+  const needsMix = useClicks || overlayLabels.length > 0;
+  if (!needsMix) return voiceLabel;
+
+  if (overlayLabels.length) chLayout = 'stereo';
+  const dur = durationSec > 0 ? durationSec.toFixed(3) : 3600;
+  const mixIns = [];
+  parts.push(`anullsrc=r=48000:cl=${chLayout}:d=${dur}[base]`);
+  mixIns.push('[base]');
+  if (voiceLabel) {
+    // Match the base layout so amix doesn't up/down-mix unexpectedly.
+    parts.push(`${voiceLabel}aformat=sample_rates=48000:channel_layouts=${chLayout}[voicem]`);
+    mixIns.push('[voicem]');
+  }
+  mixIns.push(...overlayLabels);
+
+  if (useClicks) {
+    const clickIdx = addInput(clickSfxFile(clickSoundName));
+    const splitOuts = clicks.map((_, i) => `[c${i}]`).join('');
+    parts.push(`[${clickIdx}:a]asplit=${clicks.length}${splitOuts}`);
+    clicks.forEach((tc, i) => {
+      const ms = Math.max(0, Math.round(tc * 1000));
+      const vol = Math.max(0, Math.min(2, clickVolume)).toFixed(2);
+      parts.push(`[c${i}]adelay=${ms}|${ms},volume=${vol},aformat=sample_rates=48000:channel_layouts=${chLayout}[cd${i}]`);
+      mixIns.push(`[cd${i}]`);
+    });
+  }
+
+  parts.push(`${mixIns.join('')}amix=inputs=${mixIns.length}:normalize=0:dropout_transition=0[aout]`);
+  return '[aout]';
+}
+
+// Thin orchestrator: resolves the audio plan, builds each filtergraph piece via
+// the helpers above, and assembles the final ffmpeg args. Everything ffmpeg-
+// specific (encoders, filtergraph syntax, per-layout audio plumbing) lives in
+// those helpers; this just wires them together in the right order.
 async function exportVideo({
   zoomedVideoPath,
   clips = null,
@@ -280,61 +448,26 @@ async function exportVideo({
   outputPath,
   onProgress,
 }) {
-  const vf = scaleFilter(resolution);
+  if (format === 'gif') return exportGif({ zoomedVideoPath, resolution, outputPath, onProgress });
 
-  // ---- Resolve the audio plan from the clips + their source files ----------
-  // The canvas-rendered video already carries every visual (zoom, webcam,
-  // transitions, multi-source frames); here we only rebuild the soundtrack.
-  // Each clip pulls audio from its own source, trimmed to its range, and the
-  // segments are concatenated in edit order so audio tracks the cut video.
+  const vf = scaleFilter(resolution);
+  const { vEnc, aEnc, isMp4Container } = await pickEncoders(format, quality, resolution, zoomedVideoPath);
+
+  // Resolve the audio plan from the clips + their source files. Each clip pulls
+  // audio from its own source, trimmed to its range, and the segments are
+  // concatenated in edit order so audio tracks the cut video.
   const recPath = recordingSourceId && sources[recordingSourceId] ? sources[recordingSourceId].path : null;
   // When the mic audio is detached, the recording VIDEO clips contribute no audio
   // (the detached clip in overlayClips provides it instead), so treat rec as
   // silent for the video-clip audio path.
   const recHasAudio = !recordingAudioMuted
     && !!(recordingSourceId && sources[recordingSourceId] && sources[recordingSourceId].hasAudio);
-
   // No clip list => unedited single recording: keep the original simple path.
   const cutSegs = Array.isArray(clips) && clips.length ? clips : null;
   // When every clip comes from the one recording source we can use the original
-  // recording-only filtergraph (one mic input, denoised once over the whole
-  // concatenated voice). Any imported clip — even a silent one whose gap must be
-  // preserved — forces the general multi-source path.
+  // recording-only filtergraph. Any imported clip — even a silent one whose gap
+  // must be preserved — forces the general multi-source path.
   const pureRecording = !cutSegs || cutSegs.every((c) => c.sourceId === recordingSourceId);
-
-  // ---- GIF: palette-based, silent ----
-  if (format === 'gif') {
-    const fps = 15;
-    const gh = resolution && resolution !== 'original' ? parseInt(resolution, 10) : 600;
-    const scale = `fps=${fps},scale=-2:'min(${gh}\\,ih)':flags=lanczos`;
-    const args = [
-      '-y', '-i', zoomedVideoPath,
-      '-filter_complex', `[0:v]${scale},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3`,
-      '-loop', '0',
-      outputPath,
-    ];
-    await run(args, onProgress);
-    return outputPath;
-  }
-
-  // Pick encoders. "youtube" / "master" are MP4 presets.
-  const isMp4Container =
-    format === 'mp4' || format === 'mov' || format === 'youtube' || format === 'master';
-  let vEnc;
-  let aEnc;
-  if (format === 'youtube') {
-    const h = resolution && resolution !== 'original' ? parseInt(resolution, 10) : await probeHeight(zoomedVideoPath);
-    vEnc = youtubeVideoEncoder(h);
-    aEnc = ['-c:a', 'aac', '-b:a', '384k', '-ar', '48000', '-ac', '2'];
-  } else if (format === 'master') {
-    // Near-visually-lossless H.264 — a clean source to re-edit (CapCut etc.)
-    // with lots of headroom so the next re-encode stays sharp.
-    vEnc = ['-c:v', 'libx264', '-profile:v', 'high', '-pix_fmt', 'yuv420p', '-preset', 'slow', '-crf', '14'];
-    aEnc = ['-c:a', 'aac', '-b:a', '320k', '-ar', '48000', '-ac', '2'];
-  } else {
-    vEnc = videoEncoder(format, quality);
-    aEnc = audioEncoder(format, quality);
-  }
 
   const clicks = clickSound && clickTimes.length ? clickTimes.slice(0, MAX_CLICKS) : [];
   const useClicks = clicks.length > 0;
@@ -347,109 +480,19 @@ async function exportVideo({
   const addInput = (p) => { args.push('-i', p); return inputCount++; };
 
   // A single filtergraph covers video (scaling) and audio (cut + voice + clicks).
-  const parts = [`[0:v]${vf || 'null'}[vout]`];
+  const parts = [buildVideoFilterGraph(vf)];
 
-  // The video is already cut + reordered by the renderer; here we rebuild the
-  // soundtrack from the same clips, in the same edit order, so it stays in sync.
-  // Two layouts:
-  //   mono   — the pure-recording path (the common case): one mic input, denoised
-  //            once over the whole concatenated voice (unchanged from before).
-  //   stereo — the mixed-source path: each clip pulls audio from its own source.
-  let voiceLabel = null;
-  let chLayout = 'mono';
-  if (pureRecording) {
-    if (recHasAudio) {
-      const recIdx = addInput(recPath);
-      let src = `[${recIdx}:a]`;
-      if (cutSegs) {
-        const n = cutSegs.length;
-        const ins = [];
-        if (n === 1) {
-          ins.push(`[${recIdx}:a]`);
-        } else {
-          const splitOuts = cutSegs.map((_, i) => `[m${i}]`).join('');
-          parts.push(`[${recIdx}:a]asplit=${n}${splitOuts}`);
-          for (let i = 0; i < n; i++) ins.push(`[m${i}]`);
-        }
-        const labels = [];
-        cutSegs.forEach((s, i) => {
-          const tempo = atempoChain(s.speed);
-          parts.push(`${ins[i]}atrim=start=${(+s.start).toFixed(3)}:end=${(+s.end).toFixed(3)},asetpts=PTS-STARTPTS${tempo ? ',' + tempo : ''}[vc${i}]`);
-          labels.push(`[vc${i}]`);
-        });
-        parts.push(`${labels.join('')}concat=n=${n}:v=0:a=1[vcut]`);
-        src = '[vcut]';
-      }
-      const voiceChain = noiseChain ? noiseChain : 'aformat=sample_rates=48000:channel_layouts=mono';
-      parts.push(`${src}${voiceChain}[voice]`);
-      voiceLabel = '[voice]';
-    }
-  } else {
-    chLayout = 'stereo';
-    voiceLabel = buildMultiSourceVoice(parts, addInput, cutSegs, sources, recordingSourceId, noiseChain, recordingAudioMuted);
-  }
-
-  // ---- Overlay-track audio: each clip trimmed from its source, sped (atempo),
-  // delayed to its timeline position, and folded into the final mix. -----------
-  const STEREO = 'aformat=sample_rates=48000:channel_layouts=stereo';
-  const MAX_OVERLAY_AUDIO = 200; // bound the filtergraph size (cf. MAX_CLICKS)
-  const overlayLabels = [];
-  (Array.isArray(overlayClips) ? overlayClips : []).forEach((c, i) => {
-    const s = sources[c.sourceId];
-    if (!s || !s.hasAudio) return;               // silent overlay contributes nothing
-    if (!(+c.end > +c.start)) return;            // skip degenerate/zero-length clips
-    if (overlayLabels.length >= MAX_OVERLAY_AUDIO) return;
-    const idx = addInput(s.path);
-    const tempo = atempoChain(c.speed);
-    const den = c.voice && noiseChain ? ',' + noiseChain : ''; // denoise recorded voice-over
-    const vol = Math.max(0, Math.min(4, c.gain != null ? c.gain : 1)).toFixed(2);
-    const ms = Math.max(0, Math.round((c.pos || 0) * 1000));
-    const lbl = `[ov${i}]`;
-    parts.push(
-      `[${idx}:a]atrim=start=${(+c.start).toFixed(3)}:end=${(+c.end).toFixed(3)},asetpts=PTS-STARTPTS`
-      + `${den}${tempo ? ',' + tempo : ''},volume=${vol},adelay=${ms}|${ms},${STEREO}${lbl}`
-    );
-    overlayLabels.push(lbl);
+  const { voiceLabel, chLayout } = buildAudioFilterGraph({
+    parts, addInput, cutSegs, sources, recordingSourceId, recPath, recHasAudio, pureRecording, noiseChain, recordingAudioMuted,
+  });
+  const overlayLabels = buildOverlayAudioFilterGraph({ parts, addInput, overlayClips, sources, noiseChain });
+  const audioLabel = buildFinalMix({
+    parts, addInput, voiceLabel, overlayLabels, chLayout, useClicks, clicks, clickSoundName, clickVolume, durationSec,
   });
 
-  // Overlays and click SFX both require a timed mix onto a silent base. When they
-  // are present everything is mixed in stereo (overlays are stereo-formatted).
-  const needsMix = useClicks || overlayLabels.length > 0;
-  if (needsMix) {
-    if (overlayLabels.length) chLayout = 'stereo';
-    const dur = durationSec > 0 ? durationSec.toFixed(3) : 3600;
-    const mixIns = [];
-    parts.push(`anullsrc=r=48000:cl=${chLayout}:d=${dur}[base]`);
-    mixIns.push('[base]');
-    if (voiceLabel) {
-      // Match the base layout so amix doesn't up/down-mix unexpectedly.
-      parts.push(`${voiceLabel}aformat=sample_rates=48000:channel_layouts=${chLayout}[voicem]`);
-      mixIns.push('[voicem]');
-    }
-    mixIns.push(...overlayLabels);
-
-    if (useClicks) {
-      const clickIdx = addInput(clickSfxFile(clickSoundName));
-      const splitOuts = clicks.map((_, i) => `[c${i}]`).join('');
-      parts.push(`[${clickIdx}:a]asplit=${clicks.length}${splitOuts}`);
-      clicks.forEach((tc, i) => {
-        const ms = Math.max(0, Math.round(tc * 1000));
-        const vol = Math.max(0, Math.min(2, clickVolume)).toFixed(2);
-        parts.push(`[c${i}]adelay=${ms}|${ms},volume=${vol},aformat=sample_rates=48000:channel_layouts=${chLayout}[cd${i}]`);
-        mixIns.push(`[cd${i}]`);
-      });
-    }
-
-    parts.push(`${mixIns.join('')}amix=inputs=${mixIns.length}:normalize=0:dropout_transition=0[aout]`);
-    args.push('-filter_complex', parts.join(';'));
-    args.push('-map', '[vout]', '-map', '[aout]', ...vEnc, ...aEnc);
-  } else if (voiceLabel) {
-    args.push('-filter_complex', parts.join(';'));
-    args.push('-map', '[vout]', ...vEnc, '-map', voiceLabel, ...aEnc);
-  } else {
-    args.push('-filter_complex', parts.join(';'));
-    args.push('-map', '[vout]', ...vEnc, '-an');
-  }
+  args.push('-filter_complex', parts.join(';'));
+  if (audioLabel) args.push('-map', '[vout]', '-map', audioLabel, ...vEnc, ...aEnc);
+  else args.push('-map', '[vout]', ...vEnc, '-an');
 
   // Force constant frame rate so the intermediate (captured at the monitor's
   // refresh rate, possibly VFR) becomes smoothly playable everywhere.
@@ -477,14 +520,7 @@ async function exportCleanAudio({ inputPath, noiseProfile, echoLevel = 'off', ou
 
 /** Detect whether a media file contains an audio stream (for old recordings). */
 function probeHasAudio(filePath) {
-  return new Promise((resolve) => {
-    if (!ffmpegPath) return resolve(false);
-    const proc = spawn(ffmpegPath, ['-hide_banner', '-i', filePath], { windowsHide: true });
-    let out = '';
-    proc.stderr.on('data', (d) => (out += d.toString()));
-    proc.on('error', () => resolve(false));
-    proc.on('close', () => resolve(/Stream #\d+:\d+.*: Audio:/.test(out)));
-  });
+  return probeViaStderr(filePath, false, (out) => /Stream #\d+:\d+.*: Audio:/.test(out));
 }
 
-module.exports = { exportVideo, exportCleanAudio, probeHasAudio, ffmpegPath, modelPath };
+module.exports = { exportVideo, exportCleanAudio, probeHasAudio };

@@ -51,19 +51,54 @@ let selectedSource = null;
 let mediaRecorder = null;
 let camRecorder = null;
 let camStopped = Promise.resolve();
-let pendingWrites = []; // in-flight chunk IPC writes
-let writeQueue = Promise.resolve(); // serializes chunk writes to preserve order
+// Serializes chunk writes to preserve order (Blob.arrayBuffer can otherwise
+// resolve out of order and corrupt the file). Every queueChunk call chains onto
+// this, so awaiting the latest `writeQueue` at stop time is enough to know every
+// chunk so far has landed — no separate array of in-flight promises needed.
+let writeQueue = Promise.resolve();
+let writeFailed = false; // surfaced once per recording; see queueChunk's catch
 
-// Queue a recorder chunk so chunks are written in capture order (Blob.arrayBuffer
-// can otherwise resolve out of order and corrupt the file).
-function queueChunk(blob, sender) {
+// Queue a recorder chunk so chunks are written in capture order. A failed write
+// is surfaced (and the recording stopped) as soon as it happens, rather than only
+// being discovered later when the final chain is awaited at stop time. `kind` is
+// 'video' or 'cam'.
+//
+// NB: chunks go over ipcRenderer.invoke, which structured-clone-COPIES each
+// ArrayBuffer (report finding #32 asked whether a MessagePort could transfer
+// instead). Investigated and abandoned: Electron's renderer→main MessagePort
+// delivers a TRANSFERRED ArrayBuffer as null on the main side (verified in this
+// Electron build), so the buffer would have to be copied over the port anyway —
+// identical cost to invoke, with more moving parts in the data-loss-critical
+// path. Not worth it (and the report gated it on profiling, which never flagged
+// the copy as a bottleneck vs. encode cost).
+function queueChunk(blob, kind) {
   const p = writeQueue.then(async () => {
     const buf = await blob.arrayBuffer();
-    await sender(buf);
+    await (kind === 'cam' ? window.api.sendCamChunk(buf) : window.api.sendVideoChunk(buf));
   });
-  writeQueue = p.catch(() => {});
-  pendingWrites.push(p);
+  writeQueue = p.catch((err) => {
+    if (writeFailed) return;
+    writeFailed = true;
+    console.error('Chunk write failed:', err);
+    topStatus.textContent = 'فشل حفظ جزء من التسجيل على القرص — يُوقَف التسجيل الآن لحماية ما أُنجز.';
+    stopRecording();
+  });
 }
+
+// ---------------------------------------------------------------------------
+// Tuning constants — named so the choice behind each value is explainable at a
+// glance instead of a bare literal scattered through the file.
+// ---------------------------------------------------------------------------
+const MIN_BITRATE = 1_500_000;        // floor so tiny/low-fps captures still look OK
+const MAX_BITRATE = 40_000_000;       // ceiling so 4K60 stays bounded
+const PREVIEW_MAX_WIDTH = 1280;       // the on-screen "what will be recorded" preview
+const PREVIEW_MAX_HEIGHT = 720;       // is downscaled...
+const PREVIEW_MAX_FPS = 10;           // ...and throttled — it's never the recorded file
+const FPS_THROTTLE_TOLERANCE = 0.5;   // slack added to the region-crop redraw interval
+const MIC_METER_FFT_SIZE = 512;
+const MIC_METER_RMS_SCALE = 3;        // boosts the level bar so it doesn't read as flat
+const MEDIARECORDER_TIMESLICE_MS = 250; // chunk interval, also the timer tick interval
+
 // Recording-quality presets. Each trades CPU load against file quality:
 //  - bpp: bits-per-pixel-per-frame; the encoder bitrate is derived from this
 //    times the actual capture resolution × fps, so small/low-fps captures stay
@@ -148,7 +183,7 @@ function pickVideoConfig(preset, fps, width, height, withAudio) {
   const pixels = Math.max(1, width * height);
   const raw = pixels * fps * preset.bpp;
   // Clamp to a sane window so tiny regions still look OK and 4K60 stays bounded.
-  const bitrate = Math.round(Math.min(40_000_000, Math.max(1_500_000, raw)));
+  const bitrate = Math.round(Math.min(MAX_BITRATE, Math.max(MIN_BITRATE, raw)));
   return { mime, bitrate };
 }
 
@@ -174,12 +209,14 @@ function renderPerfGuide() {
 let recState = null; // { display, recBaseEpoch, hasAudio, hasCam }
 let timerInt = null;
 let streams = [];
-let isRecording = false;
-// True from the moment a recording is requested until it's actually running (or
-// aborted). startRecording awaits several async steps before isRecording flips
-// true; during that window the preview-pause logic must NOT stop the camera the
-// recording is about to capture, so it treats `arming` like `isRecording`.
-let arming = false;
+// Recording lifecycle as a single state instead of separate isRecording/arming
+// booleans: 'idle' -> 'arming' -> 'recording' -> 'stopping' -> 'idle'. A second
+// start/stop/toggle call is only honoured when it's valid for the CURRENT phase,
+// which closes the race where a click (or repeated hotkey) landing in the async
+// gap between phases could start a second overlapping recording, or let a
+// stop-then-restart tear down the wrong session (see the state-machine findings
+// in the 2026-07-06 code review).
+let recPhase = 'idle';
 let sources = []; // current list for the active tab
 let previewStream = null; // live screen-preview capture
 let selectedRegion = null; // { x, y, w, h } in DIP rel. to the display, or null
@@ -188,6 +225,10 @@ let cropCtl = null; // { stop() } for the region-crop draw loop while recording
 // Live webcam preview + background-blur pipeline.
 const camProcessor = new CameraProcessor(camPreview);
 let camPreviewOn = false;
+// Release the MediaPipe segmentation instance's WASM/GPU resources before this
+// page is torn down (navigating to the editor, or the app closing) rather than
+// only relying on stop()/start() cycles, which intentionally leave it open.
+window.addEventListener('beforeunload', () => { camProcessor.close(); });
 
 // ---------------------------------------------------------------------------
 // Populate sources + mics
@@ -216,6 +257,22 @@ async function refreshScreenPermission() {
 
 if (openScreenSettingsBtn) {
   openScreenSettingsBtn.addEventListener('click', () => window.api.openScreenSettings());
+}
+
+// Clear and repopulate a <select> from a list of {id, label} entries — the
+// "clear select, loop devices, append option" pattern repeated (inconsistently:
+// only some call sites also restored the previous selection) across all four
+// source/camera/mic/speaker dropdowns in this file.
+function populateSelect(select, items) {
+  const prevId = select.value;
+  select.innerHTML = '';
+  items.forEach((item) => {
+    const opt = document.createElement('option');
+    opt.value = item.id;
+    opt.textContent = item.label;
+    select.appendChild(opt);
+  });
+  if (prevId && items.some((i) => i.id === prevId)) select.value = prevId;
 }
 
 async function loadSources() {
@@ -256,12 +313,7 @@ async function loadSources() {
     return;
   }
 
-  sources.forEach((s) => {
-    const opt = document.createElement('option');
-    opt.value = s.id;
-    opt.textContent = s.name;
-    sourceSelect.appendChild(opt);
-  });
+  populateSelect(sourceSelect, sources.map((s) => ({ id: s.id, label: s.name })));
 
   const chosen = sources.find((s) => s.id === prevId) || sources[0];
   sourceSelect.value = chosen.id;
@@ -398,9 +450,9 @@ async function startScreenPreview(source) {
           // It's only a small on-screen preview: capture downscaled and at a low
           // frame rate so a 4K / multi-monitor desktop isn't continuously
           // captured at full resolution (a real CPU/GPU drain while idle here).
-          maxWidth: 1280,
-          maxHeight: 720,
-          maxFrameRate: 10,
+          maxWidth: PREVIEW_MAX_WIDTH,
+          maxHeight: PREVIEW_MAX_HEIGHT,
+          maxFrameRate: PREVIEW_MAX_FPS,
         },
       },
     });
@@ -483,31 +535,39 @@ async function loadCameraSources() {
     selectedSource = null; recordBtn.disabled = true;
     return;
   }
-  sources.forEach((s) => {
-    const opt = document.createElement('option');
-    opt.value = s.id; opt.textContent = s.name;
-    sourceSelect.appendChild(opt);
-  });
+  populateSelect(sourceSelect, sources.map((s) => ({ id: s.id, label: s.name })));
   const prevId = selectedSource && selectedSource.id;
   const chosen = sources.find((s) => s.id === prevId) || sources[0];
   sourceSelect.value = chosen.id;
   selectSource(chosen.id);
 }
 
-// Start (or restart) the full-frame camera preview for camera-recording mode.
-async function startCameraModePreview() {
+// Shared start/status/error logic for both the full-frame camera-mode preview
+// and the webcam-overlay preview below — they differ only in which device id
+// they read from and whether the overlay preview box is toggled.
+async function startCamProcessorPreview(deviceId, { showBox = false } = {}) {
+  if (showBox) camPreviewBox.style.display = 'flex';
   camPreview.style.display = 'block';
-  previewPlaceholder.style.display = 'none';
+  if (!showBox) previewPlaceholder.style.display = 'none';
   camStatus.textContent = 'جارٍ تشغيل الكاميرا…';
   try {
-    await camProcessor.start(selectedSource ? selectedSource.id : undefined);
+    await camProcessor.start(deviceId);
     camPreviewOn = true;
     camStatus.textContent = '';
-    if (!camProcessor.blurAvailable) { bgPicker.classList.add('no-seg'); camStatus.textContent = 'استبدال الخلفية غير متاح على هذا النظام'; }
+    if (!camProcessor.blurAvailable) {
+      // Background replacement needs segmentation; offer only "none" without it.
+      bgPicker.classList.add('no-seg');
+      camStatus.textContent = 'استبدال الخلفية غير متاح على هذا النظام';
+    }
   } catch (err) {
     camStatus.textContent = 'خطأ في الكاميرا: ' + (err.message || err);
     console.warn('Camera preview failed:', err);
   }
+}
+
+// Start (or restart) the full-frame camera preview for camera-recording mode.
+async function startCameraModePreview() {
+  await startCamProcessorPreview(selectedSource ? selectedSource.id : undefined);
 }
 
 async function loadDevices() {
@@ -524,26 +584,14 @@ async function loadDevices() {
   const devices = await navigator.mediaDevices.enumerateDevices();
 
   const mics = devices.filter((d) => d.kind === 'audioinput');
-  micSelect.innerHTML = '';
-  mics.forEach((m, i) => {
-    const opt = document.createElement('option');
-    opt.value = m.deviceId;
-    opt.textContent = m.label || `ميكروفون ${i + 1}`;
-    micSelect.appendChild(opt);
-  });
+  populateSelect(micSelect, mics.map((m, i) => ({ id: m.deviceId, label: m.label || `ميكروفون ${i + 1}` })));
   if (!mics.length) {
     micEnabled.checked = false;
     micEnabled.disabled = true;
   }
 
   const cams = devices.filter((d) => d.kind === 'videoinput');
-  camSelect.innerHTML = '';
-  cams.forEach((c, i) => {
-    const opt = document.createElement('option');
-    opt.value = c.deviceId;
-    opt.textContent = c.label || `كاميرا ${i + 1}`;
-    camSelect.appendChild(opt);
-  });
+  populateSelect(camSelect, cams.map((c, i) => ({ id: c.deviceId, label: c.label || `كاميرا ${i + 1}` })));
   if (!cams.length) {
     camEnabled.checked = false;
     camEnabled.disabled = true;
@@ -597,14 +645,14 @@ async function startMicMonitor() {
   micMonitorCtx = new AC();
   const src = micMonitorCtx.createMediaStreamSource(micMonitorStream);
   const analyser = micMonitorCtx.createAnalyser();
-  analyser.fftSize = 512;
+  analyser.fftSize = MIC_METER_FFT_SIZE;
   src.connect(analyser);
   const data = new Uint8Array(analyser.fftSize);
   const loop = () => {
     analyser.getByteTimeDomainData(data);
     let sum = 0;
     for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
-    setMicLevel(Math.sqrt(sum / data.length) * 3); // scale RMS for a lively bar
+    setMicLevel(Math.sqrt(sum / data.length) * MIC_METER_RMS_SCALE); // scale RMS for a lively bar
     micMonitorRAF = requestAnimationFrame(loop);
   };
   loop();
@@ -626,22 +674,7 @@ micSelect.addEventListener('change', () => { if (micEnabled.checked && !micEnabl
 // ---------------------------------------------------------------------------
 async function startCamPreview() {
   if (camEnabled.disabled) return;
-  camPreviewBox.style.display = 'flex';
-  camPreview.style.display = 'block'; // overlay on the preview stage
-  camStatus.textContent = 'جارٍ تشغيل الكاميرا…';
-  try {
-    await camProcessor.start(currentKind === 'camera' ? (selectedSource && selectedSource.id) : camSelect.value);
-    camPreviewOn = true;
-    camStatus.textContent = '';
-    if (!camProcessor.blurAvailable) {
-      // Background replacement needs segmentation; offer only "none" without it.
-      bgPicker.classList.add('no-seg');
-      camStatus.textContent = 'استبدال الخلفية غير متاح على هذا النظام';
-    }
-  } catch (err) {
-    camStatus.textContent = 'خطأ في الكاميرا: ' + err.message;
-    console.warn('Camera preview failed:', err);
-  }
+  await startCamProcessorPreview(currentKind === 'camera' ? (selectedSource && selectedSource.id) : camSelect.value, { showBox: true });
 }
 
 async function stopCamPreview() {
@@ -671,7 +704,7 @@ let hiddenPause = null;
 // tear down previews the resume just restarted, leaving them dark).
 let previewGen = 0;
 async function pausePreviewsForHide() {
-  if (isRecording || arming || hiddenPause) return;
+  if (recPhase !== 'idle' || hiddenPause) return;
   const gen = ++previewGen;
   hiddenPause = { screen: !!previewStream, cam: camPreviewOn, camMode: currentKind === 'camera', mic: !!micMonitorRAF };
   if (previewStream) { await stopScreenPreview(); if (gen !== previewGen) return; }
@@ -682,7 +715,7 @@ function resumePreviewsAfterHide() {
   const snap = hiddenPause;
   hiddenPause = null;
   previewGen++; // supersede any in-flight pause
-  if (!snap || isRecording || arming) return;
+  if (!snap || recPhase !== 'idle') return;
   if (snap.cam && snap.camMode) startCameraModePreview();
   else {
     if (snap.screen && selectedSource) startScreenPreview(selectedSource);
@@ -807,8 +840,7 @@ sceneTrans.addEventListener('input', () => { sceneTransVal.textContent = sceneTr
 // Recording
 // ---------------------------------------------------------------------------
 function resetRecordingUI() {
-  isRecording = false;
-  arming = false;
+  recPhase = 'idle';
   recBanner.classList.remove('active');
   recordBtn.style.display = '';
   recordBtn.textContent = '● بدء التسجيل';
@@ -827,10 +859,111 @@ function teardownStreams() {
   try { window.api.hideRecFrame(); } catch (_) {}
 }
 
-// desktopCapturer can only grab a whole screen, so to "record an area" we draw
-// the chosen sub-rectangle of the full capture into a canvas every frame and
-// record the canvas's stream instead. Returns the cropped MediaStream.
+// desktopCapturer can only grab a whole screen, so to "record an area" we crop
+// the chosen sub-rectangle out of every captured frame and record THAT stream.
+// Two implementations (report finding #33): an off-main-thread WebCodecs path
+// (MediaStreamTrackProcessor → OffscreenCanvas in a Worker → MediaStreamTrackGenerator)
+// and the original main-thread canvas path. The worker path is self-validating:
+// if it doesn't emit a first frame quickly (API missing / unsupported / broken),
+// we tear it down and fall back, so region recording can never silently break.
 async function startRegionCrop(fullStream, display, region, fps, outSize) {
+  const track = fullStream.getVideoTracks()[0];
+  const settings = track && track.getSettings ? track.getSettings() : {};
+  if (track && typeof track.clone === 'function'
+      && canOffloadRegionCrop() && settings.width && settings.height) {
+    const rect = computeCropRect(display, region, settings.width, settings.height, outSize);
+    // Consume a CLONE in the worker: a track can't feed two MediaStreamTrackProcessors,
+    // so cloning leaves the original pristine for the main-thread fallback below.
+    const workTrack = track.clone();
+    try {
+      return await startRegionCropWorker(workTrack, rect, fps);
+    } catch (err) {
+      console.warn('Region-crop worker offload unavailable — using main thread:', err.message);
+      try { workTrack.stop(); } catch (_) {}
+      // fall through to the main-thread path
+    }
+  }
+  return startRegionCropMainThread(fullStream, display, region, fps, outSize);
+}
+
+function canOffloadRegionCrop() {
+  return typeof MediaStreamTrackProcessor !== 'undefined'
+    && typeof MediaStreamTrackGenerator !== 'undefined'
+    && typeof OffscreenCanvas !== 'undefined'
+    && typeof VideoFrame !== 'undefined';
+}
+
+// Map a DIP region on `display` to even-sized crop + output pixel rects, given
+// the captured frame's real pixel dimensions. Shared by both crop paths so the
+// worker and canvas implementations can never drift apart.
+function computeCropRect(display, region, capW, capH, outSize) {
+  const b = display.bounds;
+  const sx = capW / b.width;
+  const sy = capH / b.height;
+  const cx = Math.max(0, Math.round(region.x * sx));
+  const cy = Math.max(0, Math.round(region.y * sy));
+  // Keep the crop inside the frame and even-sized (friendlier for encoders).
+  const cw = Math.max(2, Math.min(Math.round(region.w * sx), capW - cx)) & ~1;
+  const ch = Math.max(2, Math.min(Math.round(region.h * sy), capH - cy)) & ~1;
+  // Without a target size the output matches the native crop; a platform format
+  // scales it to that format's standard resolution instead. Keep dims even-sized.
+  const outW = outSize ? (Math.max(2, Math.round(outSize.w)) & ~1) : cw;
+  const outH = outSize ? (Math.max(2, Math.round(outSize.h)) & ~1) : ch;
+  return { cx, cy, cw, ch, outW, outH };
+}
+
+// Off-main-thread crop. Resolves with the output MediaStream ONLY after the
+// worker confirms it produced a first frame — so a silently-broken pipeline
+// rejects (and the caller falls back) rather than yielding a black recording.
+function startRegionCropWorker(workTrack, rect, fps) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let worker = null;
+    let processor, generator;
+    try {
+      processor = new MediaStreamTrackProcessor({ track: workTrack });
+      generator = new MediaStreamTrackGenerator({ kind: 'video' });
+      worker = new Worker('region-crop-worker.js');
+    } catch (err) {
+      try { if (worker) worker.terminate(); } catch (_) {}
+      reject(err);
+      return;
+    }
+    const fail = (msg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { worker.terminate(); } catch (_) {}
+      reject(new Error(msg));
+    };
+    // If no frame flows shortly, the pipeline isn't working — fall back.
+    const timer = setTimeout(() => fail('no frames from crop worker'), 2500);
+    worker.onmessage = (e) => {
+      if (e.data !== 'firstframe' || settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cropCtl = {
+        stop() {
+          try { worker.postMessage({ type: 'stop' }); } catch (_) {}
+          try { worker.terminate(); } catch (_) {}
+          try { workTrack.stop(); } catch (_) {}
+        },
+      };
+      resolve(new MediaStream([generator]));
+    };
+    worker.onerror = (e) => fail('crop worker error: ' + (e.message || 'unknown'));
+    // Transfer the stream endpoints into the worker (unusable here afterwards).
+    worker.postMessage(
+      { readable: processor.readable, writable: generator.writable, ...rect },
+      [processor.readable, generator.writable],
+    );
+  });
+}
+
+// Original main-thread crop: draw the chosen sub-rectangle of a hidden <video>
+// onto a canvas every frame and record the canvas stream. Fallback for when the
+// worker offload above is unavailable.
+async function startRegionCropMainThread(fullStream, display, region, fps, outSize) {
   const srcVideo = document.createElement('video');
   srcVideo.srcObject = fullStream;
   srcVideo.muted = true;
@@ -840,20 +973,8 @@ async function startRegionCrop(fullStream, display, region, fps, outSize) {
     await new Promise((res) => srcVideo.addEventListener('loadedmetadata', res, { once: true }));
   }
 
-  const b = display.bounds;
-  // Region is in DIP relative to the display; scale to captured pixels.
-  const sx = srcVideo.videoWidth / b.width;
-  const sy = srcVideo.videoHeight / b.height;
-  const cx = Math.max(0, Math.round(region.x * sx));
-  const cy = Math.max(0, Math.round(region.y * sy));
-  // Keep the crop inside the frame and even-sized (friendlier for encoders).
-  const cw = Math.max(2, Math.min(Math.round(region.w * sx), srcVideo.videoWidth - cx)) & ~1;
-  const ch = Math.max(2, Math.min(Math.round(region.h * sy), srcVideo.videoHeight - cy)) & ~1;
-
-  // Without a target size the canvas matches the native crop; a platform format
-  // scales the crop to its standard resolution instead. Keep dims even-sized.
-  const outW = outSize ? (Math.max(2, Math.round(outSize.w)) & ~1) : cw;
-  const outH = outSize ? (Math.max(2, Math.round(outSize.h)) & ~1) : ch;
+  const { cx, cy, cw, ch, outW, outH } =
+    computeCropRect(display, region, srcVideo.videoWidth, srcVideo.videoHeight, outSize);
 
   const canvas = document.createElement('canvas');
   canvas.width = outW;
@@ -865,7 +986,7 @@ async function startRegionCrop(fullStream, display, region, fps, outSize) {
   // rAF fires at the monitor's refresh rate (often 60Hz). Throttle the redraw to
   // the requested fps so we don't burn CPU compositing frames the encoder will
   // never use — a real saving on low-spec machines recording at 30fps.
-  const minInterval = 1000 / (fps + 0.5);
+  const minInterval = 1000 / (fps + FPS_THROTTLE_TOLERANCE);
   let last = -Infinity;
   const draw = (now) => {
     if (stopped) return;
@@ -917,20 +1038,24 @@ async function startCameraRecording() {
       }
     }
 
-    pendingWrites = [];
     writeQueue = Promise.resolve();
+    writeFailed = false;
     const combined = new MediaStream(tracks);
     const vs = camStream.getVideoTracks()[0]?.getSettings?.() || {};
     const { mime, bitrate } = pickVideoConfig(preset, fps, vs.width || 1280, vs.height || 720, hasAudio);
     mediaRecorder = new MediaRecorder(combined, { mimeType: mime, videoBitsPerSecond: bitrate });
-    mediaRecorder.ondataavailable = (e) => { if (e.data.size) queueChunk(e.data, window.api.sendVideoChunk); };
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) queueChunk(e.data, 'video'); };
     mediaRecorder.onstop = onRecordingStopped;
+    mediaRecorder.onerror = (e) => {
+      console.error('MediaRecorder error:', e.error || e);
+      topStatus.textContent = 'خطأ في التسجيل — توقّف الترميز. سيُحفَظ الجزء المُسجَّل حتى الآن.';
+      stopRecording();
+    };
     camStopped = Promise.resolve(); // no separate cam file in camera mode
-    mediaRecorder.start(250);
+    mediaRecorder.start(MEDIARECORDER_TIMESLICE_MS);
 
     recState = { display: null, recBaseEpoch, hasAudio, hasCam: false };
-    isRecording = true;
-    arming = false;
+    recPhase = 'recording';
     recBanner.classList.add('active');
     recordBtn.style.display = 'none';
     recordBtn.textContent = '● جارٍ التسجيل…';
@@ -946,9 +1071,12 @@ async function startCameraRecording() {
 }
 
 async function startRecording() {
-  if (!selectedSource || isRecording) return;
+  // Only a fully idle session may start — this also blocks a second click (or
+  // repeated hotkey) landing during the async "arming" window before isRecording
+  // used to flip true, which used to reach window.api.startRecording twice.
+  if (!selectedSource || recPhase !== 'idle') return;
   recordBtn.disabled = true;
-  arming = true; // block preview-pause from stopping the camera during setup
+  recPhase = 'arming'; // block preview-pause (and a second start) during setup
 
   // Camera mode records the processed camera canvas directly (no screen capture).
   if (currentKind === 'camera') return startCameraRecording();
@@ -957,7 +1085,7 @@ async function startRecording() {
   // recording a black screen. (No-op / always ok on Windows.)
   const perm = await window.api.ensureScreenPermission();
   if (!perm.ok) {
-    arming = false;
+    recPhase = 'idle';
     topStatus.textContent = 'فعّل تسجيل الشاشة من إعدادات النظام، ثم أغلق التطبيق وأعد فتحه.';
     recordBtn.disabled = !selectedSource;
     return;
@@ -1006,6 +1134,17 @@ async function startRecording() {
       },
     });
     streams.push(fullStream);
+    // The OS can revoke screen-recording permission mid-session, the user can
+    // close the shared window, or a display can disconnect — any of these ends
+    // the captured track without MediaRecorder itself erroring, so the recording
+    // would otherwise freeze silently on the last frame. (track.stop() during our
+    // own teardown does NOT fire 'ended', so this only fires on a real revocation.)
+    fullStream.getVideoTracks()[0].addEventListener('ended', () => {
+      if (recPhase !== 'recording') return;
+      console.warn('Capture track ended unexpectedly (permission revoked / source closed)');
+      topStatus.textContent = 'توقّف التقاط الشاشة (سُحب الإذن أو أُغلق المصدر) — يُحفَظ التسجيل حتى الآن.';
+      stopRecording();
+    }, { once: true });
 
     // When a sub-region is selected, record a canvas cropped to it instead of
     // the whole screen, so the saved file contains only the chosen area.
@@ -1038,12 +1177,15 @@ async function startRecording() {
     // canvas and streamed to its own file, composited in the editor.
     let hasCam = false;
     const useCam = camEnabled.checked && !camEnabled.disabled;
-    pendingWrites = [];
     writeQueue = Promise.resolve();
+    writeFailed = false;
     if (useCam) {
       try {
         if (!camPreviewOn) await startCamPreview();
-        const camStream = camProcessor.recordStream(30);
+        // Same fps as the screen recorder — this used to be hardcoded to 30
+        // regardless of the user's selection, causing a fps mismatch between
+        // the two capture modes.
+        const camStream = camProcessor.recordStream(fps);
         // Only track (and thus tear down) the canvas stream. The raw webcam
         // stream is owned by camProcessor — stopping it here would kill its live
         // preview; camProcessor.stop() releases it.
@@ -1052,11 +1194,27 @@ async function startRecording() {
         // preset so "performance" mode lightens this too (VP8 + lower bitrate).
         const camTrack = camStream.getVideoTracks()[0]?.getSettings?.() || {};
         const camCfg = pickVideoConfig(
-          preset, 30, camTrack.width || 1280, camTrack.height || 720, false);
+          preset, fps, camTrack.width || 1280, camTrack.height || 720, false);
         camRecorder = new MediaRecorder(camStream, {
           mimeType: camCfg.mime, videoBitsPerSecond: camCfg.bitrate });
         camRecorder.ondataavailable = (e) => {
-          if (e.data.size) queueChunk(e.data, window.api.sendCamChunk);
+          if (e.data.size) queueChunk(e.data, 'cam');
+        };
+        camRecorder.onerror = (e) => {
+          // The webcam encoder failed. From here on we can't produce a valid cam
+          // track, and a truncated .cam.webm left on disk would be treated by the
+          // editor as a COMPLETE camera track (freezing on its last frame under
+          // the full-length screen). Honor the "continue without camera" message
+          // literally: drop the partial cam on the main side so the finished
+          // recording is cleanly screen-only, and clear hasCam here + on recState
+          // (captured by value below) so onRecordingStopped doesn't wait on a cam
+          // recorder that has already gone inactive.
+          console.error('Webcam MediaRecorder error:', e.error || e);
+          topStatus.textContent = 'خطأ في تسجيل الكاميرا — سيتابع تسجيل الشاشة بلا كاميرا.';
+          hasCam = false;
+          if (recState) recState.hasCam = false;
+          try { if (camRecorder.state !== 'inactive') camRecorder.stop(); } catch (_) {}
+          window.api.dropCam().catch(() => {});
         };
         hasCam = true;
       } catch (err) {
@@ -1074,18 +1232,38 @@ async function startRecording() {
     const { mime, bitrate } = pickVideoConfig(preset, fps, capW, capH, hasAudio);
     mediaRecorder = new MediaRecorder(combined, { mimeType: mime, videoBitsPerSecond: bitrate });
     mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size) queueChunk(e.data, window.api.sendVideoChunk);
+      if (e.data.size) queueChunk(e.data, 'video');
     };
     mediaRecorder.onstop = onRecordingStopped;
+    mediaRecorder.onerror = (e) => {
+      // The encoder itself failed (codec error, resource exhaustion, ...) — the
+      // timer/UI would otherwise keep looking like recording is still happening
+      // while no more data is produced.
+      //
+      // Per the MediaRecorder spec the recorder is ALREADY 'inactive' by the time
+      // this fires, and it queues its own 'stop' event — so mediaRecorder.onstop
+      // (= onRecordingStopped) still runs and flushes whatever reached disk. That
+      // means stopRecording() would be a no-op here: its `state !== 'inactive'`
+      // guard is already false. Do directly the one thing its body still needs to
+      // do — leave 'recording' and stop the paired cam recorder — otherwise
+      // onRecordingStopped would `await camStopped` forever (camStopped only
+      // resolves once camRecorder.stop() is called).
+      console.error('MediaRecorder error:', e.error || e);
+      topStatus.textContent = 'خطأ في التسجيل — توقّف الترميز. سيُحفَظ الجزء المُسجَّل حتى الآن.';
+      if (recPhase === 'recording') {
+        recPhase = 'stopping';
+        stopBtn.disabled = true;
+        if (camRecorder && camRecorder.state !== 'inactive') camRecorder.stop();
+      }
+    };
 
     // Start cam first, then screen, as close together as possible.
     camStopped = camRecorder ? new Promise((res) => { camRecorder.onstop = res; }) : Promise.resolve();
-    if (camRecorder) camRecorder.start(250);
-    mediaRecorder.start(250);
+    if (camRecorder) camRecorder.start(MEDIARECORDER_TIMESLICE_MS);
+    mediaRecorder.start(MEDIARECORDER_TIMESLICE_MS);
 
     recState = { display, recBaseEpoch, hasAudio, hasCam };
-    isRecording = true;
-    arming = false;
+    recPhase = 'recording';
 
     recBanner.classList.add('active');
     recordBtn.style.display = 'none'; // the live indicator + stop take over while recording
@@ -1115,8 +1293,7 @@ async function onRecordingStopped() {
   topStatus.textContent = 'جارٍ حفظ التسجيل…';
   try {
     if (recState.hasCam) await camStopped; // wait for the webcam recorder to flush
-    await Promise.all(pendingWrites); // ensure every chunk reached disk
-    pendingWrites = [];
+    await writeQueue; // the chunk-write chain — awaiting the tail waits for all of it
 
     await window.api.finishRecording({ hasAudio: recState.hasAudio });
 
@@ -1135,8 +1312,12 @@ async function onRecordingStopped() {
 }
 
 function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    isRecording = false;
+  // Only a live recording can be stopped. Moving to 'stopping' synchronously
+  // (rather than clearing a lone isRecording flag) means a hotkey/click landing
+  // in the async gap before onRecordingStopped's flush completes is ignored
+  // instead of racing a new recording against this one's teardown.
+  if (recPhase === 'recording' && mediaRecorder && mediaRecorder.state !== 'inactive') {
+    recPhase = 'stopping';
     stopBtn.disabled = true;
     if (camRecorder && camRecorder.state !== 'inactive') camRecorder.stop();
     mediaRecorder.stop();
@@ -1145,10 +1326,11 @@ function stopRecording() {
 
 // Toggle used by the global keyboard shortcut.
 function toggleRecord() {
-  if (isRecording) {
+  if (recPhase === 'recording') {
     stopRecording();
     return;
   }
+  if (recPhase !== 'idle') return; // arming/stopping — ignore a repeat press
   // Auto-pick the first source if none chosen yet, so the hotkey works.
   if (!selectedSource && sources.length) selectSource(sources[0].id);
   if (selectedSource) startRecording();
@@ -1163,7 +1345,7 @@ function startTimer(base) {
     const m = String(Math.floor(sec / 60)).padStart(2, '0');
     const s = String(sec % 60).padStart(2, '0');
     timerEl.textContent = `${m}:${s}`;
-  }, 250);
+  }, MEDIARECORDER_TIMESLICE_MS);
 }
 function stopTimer() {
   if (timerInt) clearInterval(timerInt);
@@ -1249,19 +1431,41 @@ async function loadLibrary() {
     const when = new Date(it.mtime).toLocaleString('ar');
     const el = document.createElement('div');
     el.className = 'rec-item';
-    el.innerHTML = `
-      <div class="rec-info">
-        <div class="rec-name">${it.name}</div>
-        <div class="rec-meta">${when} · ${it.sizeMB} م.ب</div>
-      </div>
-      ${it.hasCam ? '<span class="badge">كاميرا</span>' : ''}
-      <button class="btn-ghost reveal">عرض الملف</button>
-      <button class="btn-primary edit">تعديل</button>`;
-    el.querySelector('.edit').addEventListener('click', async () => {
+
+    // Built with textContent (not innerHTML) so a filename containing
+    // `<`/`>`/`"` can't inject markup into the library view.
+    const info = document.createElement('div');
+    info.className = 'rec-info';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'rec-name';
+    nameEl.textContent = it.name;
+    const metaEl = document.createElement('div');
+    metaEl.className = 'rec-meta';
+    metaEl.textContent = `${when} · ${it.sizeMB} م.ب`;
+    info.append(nameEl, metaEl);
+    el.appendChild(info);
+
+    if (it.hasCam) {
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = 'كاميرا';
+      el.appendChild(badge);
+    }
+
+    const revealBtn = document.createElement('button');
+    revealBtn.className = 'btn-ghost reveal';
+    revealBtn.textContent = 'عرض الملف';
+    revealBtn.addEventListener('click', () => window.api.revealFile(it.videoPath));
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn-primary edit';
+    editBtn.textContent = 'تعديل';
+    editBtn.addEventListener('click', async () => {
       topStatus.textContent = 'جارٍ فتح المحرر…';
       await window.api.openRecording(it.videoPath);
     });
-    el.querySelector('.reveal').addEventListener('click', () => window.api.revealFile(it.videoPath));
+
+    el.append(revealBtn, editBtn);
     library.appendChild(el);
   });
 }

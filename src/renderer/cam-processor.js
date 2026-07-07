@@ -29,6 +29,11 @@
       this.blurAvailable = false;
       this.rawStream = null;
       this._busy = false;
+      // Bumped on every start()/stop() so a stale in-flight start() (still
+      // awaiting getUserMedia/play()) or a stale _loop() continuation (still
+      // awaiting a segmentation result) from a superseded call can detect that
+      // and bail instead of racing the current one.
+      this._gen = 0;
     }
 
     async init() {
@@ -47,7 +52,8 @@
 
     async start(deviceId) {
       await this.stop();
-      this.rawStream = await navigator.mediaDevices.getUserMedia({
+      const gen = ++this._gen;
+      const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           deviceId: deviceId ? { exact: deviceId } : undefined,
           width: { ideal: 1280 },
@@ -56,21 +62,36 @@
         },
         audio: false,
       });
+      // A newer start() (or a stop()) landed while we awaited getUserMedia —
+      // discard this stream rather than binding a stale one over the current state.
+      if (gen !== this._gen) { stream.getTracks().forEach((t) => t.stop()); return; }
+      this.rawStream = stream;
       this.video.srcObject = this.rawStream;
       await this.video.play();
+      if (gen !== this._gen) return; // superseded again during play()
       this.canvas.width = this.video.videoWidth || 1280;
       this.canvas.height = this.video.videoHeight || 720;
       this.running = true;
-      this._loop();
+      this._loop(gen);
     }
 
     async stop() {
+      this._gen++; // invalidate any in-flight start() or _loop() continuation
       this.running = false;
+      this._busy = false; // otherwise a rapid stop-then-start could re-arm a new
+      // loop while the old one's _busy=true is never cleared, wedging future frames
       if (this.rawStream) {
         this.rawStream.getTracks().forEach((t) => t.stop());
         this.rawStream = null;
       }
       this.video.srcObject = null;
+    }
+
+    // Full teardown for good (app-level shutdown) — releases the MediaPipe
+    // WASM/GPU resources, unlike stop() which only pauses for a preview toggle.
+    close() {
+      this.stop();
+      if (this.seg) { try { this.seg.close(); } catch (_) {} this.seg = null; }
     }
 
     setBlur(on) { this.bgMode = on ? 'blur' : 'none'; }
@@ -97,8 +118,12 @@
       return this.canvas.captureStream(fps);
     }
 
-    async _loop() {
-      if (!this.running) return;
+    async _loop(gen) {
+      // `gen` pins this call chain to the start() that spawned it — if a
+      // stop()/start() has since bumped `_gen`, this is a stale continuation
+      // (e.g. still awaiting a segmentation result from before a rapid
+      // stop-then-restart) and must not keep running alongside the new loop.
+      if (!this.running || gen !== this._gen) return;
       try {
         if (this._needsSeg() && this.blurAvailable && this.seg && this.video.readyState >= 2) {
           if (!this._busy) {
@@ -113,7 +138,7 @@
         this._busy = false;
         this._drawPlain();
       }
-      if (this.running) requestAnimationFrame(() => this._loop());
+      if (this.running && gen === this._gen) requestAnimationFrame(() => this._loop(gen));
     }
 
     _drawPlain() {

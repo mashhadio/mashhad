@@ -286,6 +286,16 @@
   <video id="camVideo" style="display:none" playsinline muted></video>
   <script src="prefs.js"></script>
   <script src="zoom-engine.js"></script>
-  <script src="editor.js"></script>
+  <!-- editor.js was split into these, in this exact order (see each file's
+       header comment) — they share one global scope, same as a single file. -->
+  <script src="editor-state.js"></script>
+  <script src="editor-playback.js"></script>
+  <script src="editor-timeline-render.js"></script>
+  <script src="editor-drag.js"></script>
+  <script src="editor-zoom-clip-model.js"></script>
+  <script src="editor-project.js"></script>
+  <script src="editor-tracks.js"></script>
+  <script src="editor-controls.js"></script>
+  <script src="editor-export.js"></script>
 </body>
 </html>
