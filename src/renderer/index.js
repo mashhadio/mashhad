@@ -1139,11 +1139,21 @@ async function startRecording() {
     // the captured track without MediaRecorder itself erroring, so the recording
     // would otherwise freeze silently on the last frame. (track.stop() during our
     // own teardown does NOT fire 'ended', so this only fires on a real revocation.)
+    // Revocation can also land during the async arming window below (before the
+    // recorder is even built); flag it so the checkpoint after setup bails
+    // instead of arming a MediaRecorder on a track that will never emit frames.
+    let captureEnded = false;
     fullStream.getVideoTracks()[0].addEventListener('ended', () => {
-      if (recPhase !== 'recording') return;
-      console.warn('Capture track ended unexpectedly (permission revoked / source closed)');
-      topStatus.textContent = 'توقّف التقاط الشاشة (سُحب الإذن أو أُغلق المصدر) — يُحفَظ التسجيل حتى الآن.';
-      stopRecording();
+      if (recPhase === 'recording') {
+        console.warn('Capture track ended unexpectedly (permission revoked / source closed)');
+        topStatus.textContent = 'توقّف التقاط الشاشة (سُحب الإذن أو أُغلق المصدر) — يُحفَظ التسجيل حتى الآن.';
+        stopRecording();
+      } else if (recPhase === 'arming') {
+        // Can't stopRecording() yet (it no-ops outside 'recording') — let the
+        // post-setup checkpoint throw into the catch/teardown instead.
+        console.warn('Capture track ended during arming (permission revoked / source closed)');
+        captureEnded = true;
+      }
     }, { once: true });
 
     // When a sub-region is selected, record a canvas cropped to it instead of
@@ -1221,6 +1231,13 @@ async function startRecording() {
         console.warn('Webcam capture failed:', err.message);
       }
     }
+
+    // If the screen-capture track ended during the arming awaits above (mic/cam
+    // setup), don't build a recorder on a dead track — it would report "recording"
+    // while silently frozen. Bail into the catch/teardown. Safe here: everything
+    // from this point to recPhase='recording' is synchronous, so no 'ended' event
+    // can slip in after this check.
+    if (captureEnded) throw new Error('انتهى التقاط الشاشة أثناء التحضير (سُحب الإذن أو أُغلق المصدر).');
 
     const combined = new MediaStream(tracks);
     // Derive bitrate from the real capture size so the encoder isn't overworked

@@ -1086,7 +1086,17 @@ let exportCapture = null; // { path, stream }
 
 ipcMain.handle('export:beginCapture', async () => {
   const p = path.join(os.tmpdir(), `ssr-zoomed-${Date.now()}.webm`);
-  exportCapture = { path: p, stream: fs.createWriteStream(p) };
+  const stream = fs.createWriteStream(p);
+  const cap = { path: p, stream, error: null };
+  // A WritableStream that emits 'error' with no listener rethrows it as an
+  // uncaught exception, which would kill the main process (there is no
+  // uncaughtException handler). Keep a persistent listener so an I/O failure —
+  // e.g. the temp partition filling mid-export — is recorded and surfaced from
+  // export:endCapture instead, the way the old blocking writeFileSync rejected
+  // this IPC gracefully. (writeChunkBackpressured attaches its own transient
+  // 'error' listener; both firing is fine.)
+  stream.on('error', (err) => { cap.error = err; });
+  exportCapture = cap;
   return { ok: true };
 });
 
@@ -1102,7 +1112,23 @@ ipcMain.handle('export:endCapture', async () => {
   if (!exportCapture) return null;
   const cap = exportCapture;
   exportCapture = null;
-  await new Promise((resolve) => cap.stream.end(resolve));
+  try {
+    await new Promise((resolve, reject) => {
+      // If a write already failed, the file is truncated — surface it rather
+      // than flushing and returning a broken path. Otherwise flush, but still
+      // reject if the final flush itself errors.
+      if (cap.error) { reject(cap.error); return; }
+      cap.stream.once('error', reject);
+      cap.stream.end(() => { cap.stream.removeListener('error', reject); resolve(); });
+    });
+  } catch (err) {
+    // Remove the unusable temp file (abortCapture can't — exportCapture is
+    // already null) and reject the IPC so the renderer shows an export failure
+    // instead of feeding a truncated file to ffmpeg.
+    try { cap.stream.destroy(); } catch (_) {}
+    try { fs.unlinkSync(cap.path); } catch (_) {}
+    throw err;
+  }
   return cap.path;
 });
 
