@@ -7,7 +7,7 @@ const os = require('os');
 const { pathToFileURL } = require('url');
 
 const { startCursorTracking, stopCursorTracking, resetCursorTracking } = require('./cursor-tracker');
-const { exportVideo, exportCleanAudio, probeHasAudio } = require('./ffmpeg-export');
+const { exportVideo, exportCleanAudio, probeHasAudio, killAllFfmpeg } = require('./ffmpeg-export');
 
 // ---------------------------------------------------------------------------
 // Paths / state
@@ -488,8 +488,32 @@ let recSession = null;
 function endStream(stream) {
   return new Promise((resolve) => {
     if (!stream) return resolve();
-    stream.end(resolve);
+    // If an I/O error already destroyed the stream, end()'s callback may never
+    // fire and rec:finish would await forever — resolve on close/error too.
+    if (stream.destroyed || stream.writableEnded) return resolve();
+    let done = false;
+    const finish = () => { if (done) return; done = true; resolve(); };
+    stream.once('close', finish);
+    stream.once('error', finish);
+    stream.end(finish);
   });
+}
+
+// Create a recording write stream with a PERSISTENT 'error' listener. A Node
+// WritableStream that emits 'error' with no listener rethrows it as an uncaught
+// exception; with no uncaughtException handler that kills the whole main process
+// mid-recording (disk full, drive unplugged, permission loss) — losing the take.
+// writeChunkBackpressured only attaches a transient listener while a write is
+// actually backpressured, so an async flush failure at any other moment is
+// unguarded. Record the error on the owning session so rec:finish can surface it,
+// mirroring the export-capture guard on export:beginCapture.
+function makeRecStream(filePath, session, label) {
+  const stream = fs.createWriteStream(filePath);
+  stream.on('error', (err) => {
+    if (session) session.streamError = err;
+    console.error(`[rec] ${label} stream error:`, err && err.message);
+  });
+  return stream;
 }
 
 // Write one chunk, honoring the stream's backpressure. If write() returns false
@@ -568,12 +592,14 @@ ipcMain.handle('rec:start', async (_evt, { display, kind, region, scene, transit
     display,
     region: region || null,
     recBaseEpoch,
-    videoStream: fs.createWriteStream(videoPath),
+    videoStream: null,
     camStream: null,
+    streamError: null,
     scenes: scenesOn ? [{ t: 0, scene }] : null,
     transition: scenesOn ? (Number(transition) || 0) : 0,
     currentScene: scenesOn ? scene : null,
   };
+  recSession.videoStream = makeRecStream(videoPath, recSession, 'video');
 
   if (scenesOn) {
     registerSceneShortcuts();
@@ -597,7 +623,7 @@ ipcMain.handle('rec:camChunk', async (_evt, buffer) => {
   // The cam encoder can have errored and been dropped (rec:dropCam) while a
   // chunk was already in flight — don't recreate the stream we just deleted.
   if (recSession.camDropped) return { ok: false };
-  if (!recSession.camStream) recSession.camStream = fs.createWriteStream(recSession.camPath);
+  if (!recSession.camStream) recSession.camStream = makeRecStream(recSession.camPath, recSession, 'cam');
   await writeChunkBackpressured(recSession.camStream, Buffer.from(buffer));
   return { ok: true };
 });
@@ -633,7 +659,10 @@ ipcMain.handle('rec:finish', async (_evt, { hasAudio }) => {
   hideSceneIndicator();
 
   const hasCam = !!s.camStream;
-  fs.writeFileSync(
+  // Async write: the cursor log can be tens of thousands of samples (multi-MB for
+  // a long capture), so writing it synchronously stalled the main process right at
+  // record-stop. rec:finish is already async and its result is awaited.
+  await fs.promises.writeFile(
     s.cursorPath,
     JSON.stringify({
       recBaseEpoch: s.recBaseEpoch,
@@ -648,7 +677,7 @@ ipcMain.handle('rec:finish', async (_evt, { hasAudio }) => {
 
   let scenesPath = null;
   if (s.scenes && s.scenes.length) {
-    fs.writeFileSync(s.scenesPath, JSON.stringify({
+    await fs.promises.writeFile(s.scenesPath, JSON.stringify({
       recBaseEpoch: s.recBaseEpoch, transition: s.transition, events: s.scenes,
     }));
     scenesPath = s.scenesPath;
@@ -666,7 +695,9 @@ ipcMain.handle('rec:finish', async (_evt, { hasAudio }) => {
   };
   currentProjectFile = null; // fresh recording — not tied to any saved project yet
   pendingProject = null;
-  return { ok: true };
+  // If a write stream errored mid-capture the video/cam file is truncated; report
+  // it so the renderer can warn instead of opening a silently-broken recording.
+  return { ok: true, streamError: s.streamError ? String(s.streamError.message || s.streamError) : null };
 });
 
 ipcMain.handle('rec:abort', async () => {
@@ -753,7 +784,7 @@ ipcMain.handle('voiceover:save', async (_evt, buffer) => {
   // Persistent (not tmp) so a saved project can still resolve this take later.
   ensureDir(PROJECT_ASSETS_DIR);
   const p = path.join(PROJECT_ASSETS_DIR, `vo-${Date.now()}-${id}.webm`);
-  fs.writeFileSync(p, Buffer.from(buffer));
+  await fs.promises.writeFile(p, Buffer.from(buffer));
   mediaSources[id] = { path: p, hasAudio: true, kind: 'voiceover' };
   return { id, url: pathToFileUrl(p), path: p };
 });
@@ -949,11 +980,23 @@ async function cleanupStaleFiles() {
 // Atomic write: serialize to a temp file in the same directory, then rename over
 // the target. A crash/power-loss mid-write leaves the previous good file intact
 // instead of a truncated (unparseable) project.
+// Async so the background autosave (fires while the user edits) and manual save
+// don't block the main process — the write+rename of a large edit-state used to
+// stall the UI thread on every autosave. buildProjectData/JSON.stringify stay
+// synchronous (fast, CPU-bound) and run eagerly, capturing the state at call time;
+// only the disk I/O is moved off the hot path. Writes are chained so an autosave
+// firing while the previous one is mid-flight can't interleave on the shared .tmp
+// path (a race the old synchronous write couldn't hit).
+let projectWriteChain = Promise.resolve();
 function writeProjectFile(target, payload) {
-  const data = buildProjectData(payload);
-  const tmp = `${target}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-  fs.renameSync(tmp, target);
+  const json = JSON.stringify(buildProjectData(payload), null, 2);
+  const run = projectWriteChain.then(async () => {
+    const tmp = `${target}.tmp`;
+    await fs.promises.writeFile(tmp, json);
+    await fs.promises.rename(tmp, target);
+  });
+  projectWriteChain = run.catch(() => {}); // keep the chain alive even if this write fails
+  return run;
 }
 
 // Manual save. `saveAs` (or no bound file yet) prompts for a location; otherwise
@@ -971,7 +1014,7 @@ ipcMain.handle('project:save', async (_evt, { edit, sources, saveAs }) => {
     target = filePath;
   }
   try {
-    writeProjectFile(target, { edit, sources });
+    await writeProjectFile(target, { edit, sources });
   } catch (err) {
     return { error: err.message };
   }
@@ -984,7 +1027,7 @@ ipcMain.handle('project:save', async (_evt, { edit, sources, saveAs }) => {
 ipcMain.handle('project:autosave', async (_evt, { edit, sources }) => {
   if (!currentProjectFile) return { skipped: true };
   try {
-    writeProjectFile(currentProjectFile, { edit, sources });
+    await writeProjectFile(currentProjectFile, { edit, sources });
     return { path: currentProjectFile };
   } catch (err) {
     return { error: err.message };
@@ -1210,6 +1253,8 @@ ipcMain.handle('export:run', async (_evt, { zoomedVideoPath, options }) => {
       format,
       quality: options.quality || 'balanced',
       resolution: options.resolution || 'original',
+      audioSyncMs: options.audioSyncMs || 0,
+      videoInputFps: options.videoInputFps || 0,
       outputPath: filePath,
       onProgress: (line) => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('export:progress', line);
@@ -1220,6 +1265,14 @@ ipcMain.handle('export:run', async (_evt, { zoomedVideoPath, options }) => {
   }
 
   return { ok: true, outputPath: filePath };
+});
+
+// Cancel a running export by killing the ffmpeg child. The renderer's export
+// promise rejects with a { cancelled:true } error (see run() in ffmpeg-export),
+// and the temp zoomed file is cleaned up by export:run's finally.
+ipcMain.handle('export:cancel', async () => {
+  killAllFfmpeg();
+  return { ok: true };
 });
 
 // Render the cleaned mic audio for in-editor preview (cached per profile). A
@@ -1364,6 +1417,7 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  killAllFfmpeg(); // don't leave an export encoder orphaned after the app exits
   if (settingsWriteTimer) { clearTimeout(settingsWriteTimer); flushSettings(); }
 });
 

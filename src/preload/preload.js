@@ -64,6 +64,7 @@ contextBridge.exposeInMainWorld('api', {
   endExportCapture: () => ipcRenderer.invoke('export:endCapture'),
   abortExportCapture: () => ipcRenderer.invoke('export:abortCapture'),
   runExport: (payload) => ipcRenderer.invoke('export:run', payload),
+  cancelExport: () => ipcRenderer.invoke('export:cancel'),
   onExportProgress: (cb) => {
     const handler = (_e, line) => cb(line);
     ipcRenderer.on('export:progress', handler);
