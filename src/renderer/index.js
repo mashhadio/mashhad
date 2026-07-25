@@ -554,6 +554,7 @@ async function startCamProcessorPreview(deviceId, { showBox = false } = {}) {
     await camProcessor.start(deviceId);
     camPreviewOn = true;
     camStatus.textContent = '';
+    refreshCamLabels(); // now that video is granted, fill in real camera names
     if (!camProcessor.blurAvailable) {
       // Background replacement needs segmentation; offer only "none" without it.
       bgPicker.classList.add('no-seg');
@@ -571,15 +572,23 @@ async function startCameraModePreview() {
 }
 
 async function loadDevices() {
+  // Grab MIC permission always (the app records the mic). Grab CAMERA permission at
+  // launch ONLY when the camera is set to auto-start (saved camEnabled) — those
+  // users get the webcam turned on regardless, so there's no extra LED blip, and it
+  // lets us populate real camera deviceIds so their saved camera choice is honored.
+  // Screen-only users (the common case) stay audio-only: no webcam wake at startup.
+  // Without a video grant Chromium masks BOTH the label AND the deviceId of each
+  // camera, so a first-time camera user's real device list is filled in lazily by
+  // refreshCamLabels() once they enable it (which grants video then).
+  const wantCam = Prefs.get('camEnabled', false);
   try {
-    // Need a permission grab first so device labels are populated.
-    const tmp = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    const tmp = await navigator.mediaDevices.getUserMedia(wantCam ? { audio: true, video: true } : { audio: true });
     tmp.getTracks().forEach((t) => t.stop());
   } catch (_) {
-    try {
-      const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
-      tmp.getTracks().forEach((t) => t.stop());
-    } catch (__) {}
+    // Camera grab failed (no cam / denied) — fall back to mic-only so labels still load.
+    if (wantCam) {
+      try { const t2 = await navigator.mediaDevices.getUserMedia({ audio: true }); t2.getTracks().forEach((t) => t.stop()); } catch (__) {}
+    }
   }
   const devices = await navigator.mediaDevices.enumerateDevices();
 
@@ -590,6 +599,9 @@ async function loadDevices() {
     micEnabled.disabled = true;
   }
 
+  // enumerateDevices lists cameras even without video permission (labels blank),
+  // so camera presence — and thus whether to disable the toggle — is known now;
+  // only the human-readable labels wait for refreshCamLabels().
   const cams = devices.filter((d) => d.kind === 'videoinput');
   populateSelect(camSelect, cams.map((c, i) => ({ id: c.deviceId, label: c.label || `كاميرا ${i + 1}` })));
   if (!cams.length) {
@@ -597,6 +609,20 @@ async function loadDevices() {
     camEnabled.disabled = true;
     camSelect.disabled = true;
   }
+}
+
+// After the camera has been granted (first preview/record), re-enumerate so the
+// dropdown shows real device names instead of the generic "كاميرا N" placeholders.
+// No-op once labels are populated.
+async function refreshCamLabels() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter((d) => d.kind === 'videoinput');
+    if (!cams.length || !cams.some((c) => c.label)) return;
+    const current = camSelect.value;
+    populateSelect(camSelect, cams.map((c, i) => ({ id: c.deviceId, label: c.label || `كاميرا ${i + 1}` })));
+    if (current && [...camSelect.options].some((o) => o.value === current)) camSelect.value = current;
+  } catch (_) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -1312,9 +1338,15 @@ async function onRecordingStopped() {
     if (recState.hasCam) await camStopped; // wait for the webcam recorder to flush
     await writeQueue; // the chunk-write chain — awaiting the tail waits for all of it
 
-    await window.api.finishRecording({ hasAudio: recState.hasAudio });
+    const fin = await window.api.finishRecording({ hasAudio: recState.hasAudio });
 
     teardownStreams();
+
+    // A disk-write error mid-capture leaves the video truncated — warn rather
+    // than silently opening a broken recording.
+    if (fin && fin.streamError) {
+      alert('تحذير: حدث خطأ أثناء كتابة التسجيل على القرص، وقد يكون الملف ناقصًا.\n' + fin.streamError);
+    }
 
     topStatus.textContent = 'جارٍ فتح المحرر…';
     await window.api.openEditor();

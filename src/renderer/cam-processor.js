@@ -29,6 +29,13 @@
       this.blurAvailable = false;
       this.rawStream = null;
       this._busy = false;
+      // Cap the processing loop to this rate. A webcam PiP needs no more than ~30
+      // fps, but the loop was driven by requestAnimationFrame — so on a 60/120 Hz
+      // display it ran segmentation + the CPU-rendered blur composite 2–4× more
+      // often than the recording needs, stealing CPU from the screen encoder
+      // (the frame-drop path). Gate to targetFps instead.
+      this.targetFps = 30;
+      this._lastFrameT = 0;
       // Bumped on every start()/stop() so a stale in-flight start() (still
       // awaiting getUserMedia/play()) or a stale _loop() continuation (still
       // awaiting a segmentation result) from a superseded call can detect that
@@ -124,6 +131,15 @@
       // (e.g. still awaiting a segmentation result from before a rapid
       // stop-then-restart) and must not keep running alongside the new loop.
       if (!this.running || gen !== this._gen) return;
+      // Rate-limit to targetFps: if the last processed frame was too recent, skip
+      // the work this tick and just reschedule. (1ms slack so a ~16.6ms rAF cadence
+      // still lands one frame per ~33ms slot rather than dropping to ~20fps.)
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      if (now - this._lastFrameT < 1000 / this.targetFps - 1) {
+        requestAnimationFrame(() => this._loop(gen));
+        return;
+      }
+      this._lastFrameT = now;
       try {
         if (this._needsSeg() && this.blurAvailable && this.seg && this.video.readyState >= 2) {
           if (!this._busy) {
@@ -178,8 +194,20 @@
         ctx.drawImage(this.bgImage, (w - dw) / 2, (h - dh) / 2, dw, dh);
       } else {
         // 'blur' (or 'image' with no loaded image yet): blurred camera frame.
-        ctx.filter = `blur(${this.blurAmount}px)`;
-        ctx.drawImage(results.image, 0, 0, w, h);
+        // Blur is the one costly per-frame filter here, and this canvas is
+        // CPU-rendered (willReadFrequently). Blur a half-size copy with half the
+        // radius and upscale it — visually ~identical for a soft background but a
+        // fraction of the cost, since blur time scales with area × radius.
+        const bw = Math.max(1, w >> 1);
+        const bh = Math.max(1, h >> 1);
+        let buf = this._bgBuf;
+        if (!buf) { buf = this._bgBuf = document.createElement('canvas'); this._bgBufCtx = buf.getContext('2d'); }
+        if (buf.width !== bw || buf.height !== bh) { buf.width = bw; buf.height = bh; }
+        const bctx = this._bgBufCtx;
+        bctx.clearRect(0, 0, bw, bh);
+        bctx.drawImage(results.image, 0, 0, bw, bh);
+        ctx.filter = `blur(${Math.max(1, this.blurAmount / 2)}px)`;
+        ctx.drawImage(buf, 0, 0, w, h);
       }
 
       ctx.restore();
