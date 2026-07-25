@@ -134,7 +134,15 @@ async function applyPendingProject() {
 
   applyState({ clips: edit.clips || [], overlays: edit.overlays || [], audio: edit.audio || [] });
   blocks = (edit.blocks || []).map((b) => ({ ...b }));
-  if (Array.isArray(edit.sceneEvents) && edit.sceneEvents.length) sceneEvents = edit.sceneEvents.map((e) => ({ ...e }));
+  // Same orphaned-camera guard as a fresh recording load (see editor-playback):
+  // a scene timeline that never shows the camera would suppress the webcam PiP
+  // and leave a recorded camera track unusable, so fall back to the PiP path.
+  if (Array.isArray(edit.sceneEvents) && edit.sceneEvents.length) {
+    const camOrphaned =
+      recording && recording.hasCam &&
+      !edit.sceneEvents.some((e) => e.scene === 'cam' || e.scene === 'both');
+    if (!camOrphaned) sceneEvents = edit.sceneEvents.map((e) => ({ ...e }));
+  }
   if (edit.sceneTransDur != null) sceneTransDur = edit.sceneTransDur;
   if (edit.defaultScale != null) {
     defaultScale = edit.defaultScale;
@@ -242,6 +250,7 @@ function splitAtPlayhead() {
   const idx = clips.indexOf(c);
   const right = { id: clipSeq++, sourceId: c.sourceId, start: t, end: c.end, speed: c.speed || 1 };
   c.end = t;
+  invalidateClipTimeCache(); // clip times changed in place — force a duration rebuild
   clips.splice(idx + 1, 0, right);
   selectClip(right.id); // redraws the timeline
 }

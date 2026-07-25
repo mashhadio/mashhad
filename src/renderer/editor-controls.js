@@ -28,6 +28,7 @@ function setSpeed(v) {
   if (Math.abs(sp - (c.speed || 1)) < 1e-4) return;
   pushHistory();
   c.speed = sp;
+  invalidateClipTimeCache(); // in-place edit keeps the clip count — force a duration rebuild
   buildTimeline();
   seekEdited(clamp(playheadEdited, 0, editedDuration()));
   updateSpeedControl();
@@ -326,9 +327,18 @@ importAudioBtn.addEventListener('click', importAudioFiles);
 // second, near-identical resize handler further down that did the same
 // buildTimeline()+movePlayhead() rebuild a second time on every resize — merged
 // into this one.)
+let _resizeRaf = 0;
 window.addEventListener('resize', () => {
   if (!clips.length || drag || clipDrag) return; // don't detach the element being dragged
-  relayoutTimeline();
+  // Coalesce the burst of resize events a window drag fires into one relayout per
+  // frame — relayoutTimeline() rebuilds the whole timeline, so running it per event
+  // made live window-resizing stutter.
+  if (_resizeRaf) return;
+  _resizeRaf = requestAnimationFrame(() => {
+    _resizeRaf = 0;
+    if (!clips.length || drag || clipDrag) return;
+    relayoutTimeline();
+  });
 });
 
 // Link/unlink the recording's audio from its video (detach onto an audio track).
@@ -533,7 +543,7 @@ window.addEventListener('mousemove', (e) => {
   const p = canvasPoint(e);
   camFx = clamp((p.x - camDrag.offX) / canvas.width, 0, 1);
   camFy = clamp((p.y - camDrag.offY) / canvas.height, 0, 1);
-  drawAt(video.currentTime);
+  requestPreviewRedraw(); // coalesce to one canvas redraw per frame
 });
 window.addEventListener('mouseup', () => { camDrag = null; });
 canvas.addEventListener('mousemove', (e) => {

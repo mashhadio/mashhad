@@ -71,6 +71,7 @@ function clipLen(c) { return c.end - c.start; }             // source-time lengt
 // mutator invalidation to keep in sync.
 let clipStartCache = [];
 let clipDurationCache = 0;
+let clipTimeCacheDirty = true;
 
 function rebuildClipTimeCache() {
   clipStartCache = new Array(clips.length);
@@ -80,12 +81,24 @@ function rebuildClipTimeCache() {
     acc += clipTLen(clips[i]);
   }
   clipDurationCache = acc;
+  clipTimeCacheDirty = false;
+}
+
+// Mark the prefix-sum cache stale so the next read rebuilds it. The previous
+// validity test was count-only: an in-place edit that changes a clip's start/end/
+// speed but keeps the clip COUNT (a trim, a speed change) left editedDuration()
+// returning a STALE length — and that length becomes the export audio span, so a
+// wrong value silently desyncs A/V. Every mutator still calls buildTimeline()
+// (which rebuilds eagerly); this makes the getters correct even if a read sneaks
+// in before that, and is called directly from the in-place edits below.
+function invalidateClipTimeCache() { clipTimeCacheDirty = true; }
+function ensureClipTimeCache() {
+  if (clipTimeCacheDirty || clipStartCache.length !== clips.length) rebuildClipTimeCache();
 }
 
 function editedDuration() {
-  return clipStartCache.length === clips.length
-    ? clipDurationCache
-    : clips.reduce((a, c) => a + clipTLen(c), 0);
+  ensureClipTimeCache();
+  return clipDurationCache;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,9 +194,8 @@ function resolveAudioDuration(url) {
 
 // Edited start (seconds) of the clip at index `idx`.
 function editedStartOf(idx) {
-  if (clipStartCache.length === clips.length && idx >= 0 && idx < clipStartCache.length) {
-    return clipStartCache[idx];
-  }
+  ensureClipTimeCache();
+  if (idx >= 0 && idx < clipStartCache.length) return clipStartCache[idx];
   let s = 0;
   for (let i = 0; i < idx; i++) s += clipTLen(clips[i]);
   return s;
@@ -257,5 +269,10 @@ function applyState(s) {
   audioTracks = (s.audio || []).map((t) => ({ id: t.id, clips: t.clips.map((c) => ({ ...c })) }));
   blocks = (s.blocks || []).map((b) => ({ ...b }));
   if (s.sceneTransDur != null) sceneTransDur = s.sceneTransDur;
+  // Undo/redo/project-load can swap in a clips array of the SAME length but with
+  // different durations, which the count-based cache check wouldn't catch — force
+  // a duration rebuild on the next read. (Callers also buildTimeline() right after,
+  // but this keeps editedDuration() correct even if a read sneaks in between.)
+  invalidateClipTimeCache();
 }
 

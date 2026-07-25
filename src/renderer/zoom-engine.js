@@ -36,6 +36,7 @@
 
     setBlocks(blocks) {
       this.blocks = blocks;
+      this._cacheT = undefined; // block geometry changed — drop the per-frame cache
     }
 
     // Pre-compute a low-pass filtered cursor path (in seconds) so panning is smooth.
@@ -108,13 +109,23 @@
 
     /** Returns { scale, cx, cy } for time t (seconds). */
     getState(t) {
+      // Per-frame memo: a single drawn frame calls getState once for drawFrame and
+      // again for every in-window click via mapPoint, all with the identical `t`.
+      // Recomputing the block scan + cursor lookup each time was pure waste; cache
+      // the last result and return it when `t` repeats (invalidated by setBlocks).
+      // Callers only read the result, so sharing the object is safe.
+      if (t === this._cacheT) return this._cacheState;
       const scale = this._scaleAt(t);
-      if (scale <= 1.0001) return { scale: 1, cx: 0.5, cy: 0.5 };
-      const c = this._cursorAt(t);
-      const half = 0.5 / scale;
-      const cx = clamp(c.x, half, 1 - half);
-      const cy = clamp(c.y, half, 1 - half);
-      return { scale, cx, cy };
+      let st;
+      if (scale <= 1.0001) st = { scale: 1, cx: 0.5, cy: 0.5 };
+      else {
+        const c = this._cursorAt(t);
+        const half = 0.5 / scale;
+        st = { scale, cx: clamp(c.x, half, 1 - half), cy: clamp(c.y, half, 1 - half) };
+      }
+      this._cacheT = t;
+      this._cacheState = st;
+      return st;
     }
 
     /**

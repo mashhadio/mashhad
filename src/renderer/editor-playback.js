@@ -62,8 +62,21 @@ async function init() {
     // Scene switches (screen/cam/both), if this recording used scene mode.
     const sc = recording.scenes;
     if (sc && Array.isArray(sc.events) && sc.events.length) {
-      sceneEvents = sc.events.map((e) => ({ t: e.t / 1000, scene: e.scene }));
-      sceneTransDur = sc.transition != null ? sc.transition : 0.3;
+      const evs = sc.events.map((e) => ({ t: e.t / 1000, scene: e.scene }));
+      // A scene timeline that NEVER shows the camera (no 'cam'/'both' event —
+      // e.g. scene mode was on but the user started on 'screen' and never pressed
+      // a switch hotkey) would render as screen-only AND suppress the webcam PiP
+      // entirely, orphaning a camera track that was actually recorded (hasCam)
+      // with no way to display or position it. Fall back to the normal recording
+      // path in that case, where the camera is a PiP overlay the user can toggle
+      // (camShow) and drag. Recordings that use any 'cam'/'both' scene keep full
+      // scene composition.
+      const camOrphaned =
+        recording.hasCam && !evs.some((e) => e.scene === 'cam' || e.scene === 'both');
+      if (!camOrphaned) {
+        sceneEvents = evs;
+        sceneTransDur = sc.transition != null ? sc.transition : 0.3;
+      }
     }
 
     await seekTo(0);
@@ -477,6 +490,22 @@ function applyEditorPrefs() {
   // Echo/reverb removal toggle.
   echoLevel.value = Prefs.get('echoLevel', 'off');
 
+  // Export audio-sync nudge (ms). Shifts the whole soundtrack against the picture
+  // so the user can correct any A/V offset by eye: positive delays the audio (use
+  // when the voice runs ahead of the lips), negative advances it.
+  const audioSyncText = (ms) => {
+    ms = parseInt(ms, 10) || 0;
+    if (ms === 0) return 'متزامن';
+    return ms > 0 ? `الصوت متأخّر ${ms}م.ث` : `الصوت مُقدَّم ${-ms}م.ث`;
+  };
+  audioSync.value = String(Prefs.get('audioSyncMs', 0));
+  audioSyncVal.textContent = audioSyncText(audioSync.value);
+  audioSync.addEventListener('input', () => {
+    Prefs.set('audioSyncMs', parseInt(audioSync.value, 10) || 0);
+    audioSyncVal.textContent = audioSyncText(audioSync.value);
+    markDirty();
+  });
+
   // Persist on change.
   noiseProfile.addEventListener('change', () => {
     Prefs.set('noiseProfile', noiseProfile.value);
@@ -765,12 +794,22 @@ function easeOutCubic(p) { return 1 - Math.pow(1 - p, 3); }
 // Click effect at each recent click, placed in the zoomed view. Style, colour
 // and size are user-configurable.
 function drawClickFx(t) {
-  if (!clickFx.checked || !(recCursor().clicks || []).length) return;
+  const clicks = recCursor().clicks || [];
+  if (!clickFx.checked || !clicks.length) return;
   const { r: cr, g: cg, b: cb } = hexToRgb(clickColor.value);
   const baseR = canvas.height * (parseInt(clickSize.value, 10) / 100);
   const style = clickStyle.value;
 
-  for (const c of recCursor().clicks) {
+  // Clicks are time-ordered. Binary-search the first click still inside the effect
+  // window [t - CLICK_FX_DUR, t] and iterate only from there — the old loop started
+  // at index 0 and `continue`d over EVERY past click, i.e. O(clicks) per frame,
+  // so playback FPS sagged the longer/further-in a session got.
+  const from = t - CLICK_FX_DUR;
+  let lo = 0, hi = clicks.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (clicks[mid].t / 1000 < from) lo = mid + 1; else hi = mid; }
+
+  for (let i = lo; i < clicks.length; i++) {
+    const c = clicks[i];
     const tc = c.t / 1000;
     const age = t - tc;
     if (age < 0) break; // clicks are time-ordered; the rest are in the future
@@ -1106,6 +1145,7 @@ function playClickSounds(t) {
 
 function play() {
   if (!clips.length) return;
+  if (playing) return; // already rolling — a second renderLoop() would double-draw forever
   if (playheadEdited >= editedDuration() - 0.05) seekEdited(0); // restart from top
   playing = true;
   lastFxTime = video.currentTime;
@@ -1136,7 +1176,31 @@ playBtn.addEventListener('click', () => {
   playing ? pause() : play();
 });
 
+// Coalesce paused-state preview redraws. Drag handlers (block move/resize, cam PiP
+// drag) fire mousemove several times per animation frame and each used to call
+// drawAt()+drawOverlays() synchronously — redundant full-canvas redraws. Schedule
+// at most one redraw per frame instead. During playback the render loop already
+// draws every frame, so this is a no-op then.
+let _previewRedrawPending = false;
+function requestPreviewRedraw() {
+  if (_previewRedrawPending || playing) return;
+  _previewRedrawPending = true;
+  requestAnimationFrame(() => {
+    _previewRedrawPending = false;
+    if (playing) return;
+    drawAt(video.currentTime);
+    drawOverlays(playheadEdited);
+  });
+}
+
+let _lastTimeLabel = '';
 function updateTimeLabel() {
-  timeLabel.textContent = `${fmt(playheadEdited)} / ${fmt(editedDuration())}`;
+  // fmt() rounds to whole seconds, so the string only changes ~once a second even
+  // though this runs every frame — skip the DOM write (and its layout invalidation)
+  // when it hasn't changed.
+  const s = `${fmt(playheadEdited)} / ${fmt(editedDuration())}`;
+  if (s === _lastTimeLabel) return;
+  _lastTimeLabel = s;
+  timeLabel.textContent = s;
 }
 

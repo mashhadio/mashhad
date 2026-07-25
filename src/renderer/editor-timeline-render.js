@@ -37,6 +37,7 @@ function buildRuler() {
 
 // Rebuild + reposition the playhead (used on window resize).
 function relayoutTimeline() {
+  _playheadTimelineW = 0; // container width may have changed (window resize) — re-measure
   buildTimeline();
   movePlayhead(playheadEdited);
 }
@@ -426,8 +427,14 @@ function buildOverlayRows() {
   pruneOverlayEls();
 }
 
+// Cached timeline width. movePlayhead runs every frame during playback; reading
+// clientWidth there forces a synchronous layout right after writing playhead's
+// left, so cache the container width (it only changes on window resize, which
+// clears this via relayoutTimeline).
+let _playheadTimelineW = 0;
 function movePlayhead(te) {
-  playhead.style.left = `${(te / (editedDuration() || 1)) * timeline.clientWidth}px`;
+  if (!_playheadTimelineW) _playheadTimelineW = timeline.clientWidth;
+  playhead.style.left = `${(te / (editedDuration() || 1)) * _playheadTimelineW}px`;
 }
 
 // Redraw once the element's async seek lands, so scrubbing across sources shows

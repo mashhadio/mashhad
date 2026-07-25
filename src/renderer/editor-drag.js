@@ -199,8 +199,7 @@ window.addEventListener('mousemove', (e) => {
     drag.el.style.left = `${(es / total) * w}px`;
     drag.el.style.width = `${Math.max(10, ((ee - es) / total) * w)}px`;
     drag.el.querySelector('span').textContent = `${b.scale.toFixed(1)}×`;
-    drawAt(video.currentTime);
-    drawOverlays(playheadEdited);
+    requestPreviewRedraw(); // coalesce to one canvas redraw per frame
     return;
   }
 
