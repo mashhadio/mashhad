@@ -77,6 +77,8 @@ const clickVolVal = document.getElementById('clickVolVal');
 const exportFormat = document.getElementById('exportFormat');
 const exportQuality = document.getElementById('exportQuality');
 const exportResolution = document.getElementById('exportResolution');
+const audioSync = document.getElementById('audioSync');
+const audioSyncVal = document.getElementById('audioSyncVal');
 
 const exportBtn = document.getElementById('exportBtn');
 const progress = document.getElementById('progress');

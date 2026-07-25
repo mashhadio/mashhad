@@ -254,6 +254,11 @@
               <option value="480">480p</option>
             </select>
           </div>
+          <div class="slider">
+            <span>مزامنة الصوت <span class="status" id="audioSyncVal" style="font-size:11px">متزامن</span></span>
+            <input type="range" id="audioSync" min="-400" max="400" step="5" value="0"
+              title="اضبط تزامن الصوت مع الصورة عند التصدير. القيم الموجبة تؤخّر الصوت (استخدمها إذا كان الصوت يسبق الشفاه)، والسالبة تقدّم الصوت (إذا كانت الصورة تسبق الصوت).">
+          </div>
         </div>
         <div class="export-bar">
           <button class="btn-primary" id="exportBtn">⬇ تصدير</button>

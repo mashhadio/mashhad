@@ -105,13 +105,30 @@ function chains() {
   };
 }
 
+// Live ffmpeg children. Retained so an in-progress export can be cancelled and so
+// we never orphan an encoder: on Windows a child outlives its parent, so without
+// this a quit/window-close mid-export leaves ffmpeg running — still burning CPU/GPU
+// and writing the output file after the user has "left". main.js kills these on
+// export:cancel and on will-quit.
+const liveProcs = new Set();
+function trackProc(proc) {
+  liveProcs.add(proc);
+  proc.once('close', () => liveProcs.delete(proc));
+  proc.once('error', () => liveProcs.delete(proc));
+  return proc;
+}
+function killAllFfmpeg() {
+  for (const p of liveProcs) { try { p._cancelled = true; p.kill(); } catch (_) {} }
+  liveProcs.clear();
+}
+
 function run(args, onProgress) {
   return new Promise((resolve, reject) => {
     if (!ffmpegPath) {
       reject(new Error('ffmpeg binary not found (ffmpeg-static failed to resolve).'));
       return;
     }
-    const proc = spawn(ffmpegPath, args, { windowsHide: true });
+    const proc = trackProc(spawn(ffmpegPath, args, { windowsHide: true }));
     const STDERR_TAIL = 2000; // only the trailing chars are ever surfaced, on failure
     let stderr = '';
     proc.stderr.on('data', (d) => {
@@ -130,6 +147,11 @@ function run(args, onProgress) {
     proc.on('error', reject);
     proc.on('close', (code) => {
       if (code === 0) resolve();
+      // Only a kill WE requested (killAllFfmpeg sets _cancelled) is a cancellation.
+      // An OS/OOM kill also closes with a signal/null code, but that's a real
+      // failure — report it (with the stderr tail) rather than masking it as
+      // "cancelled" and dropping the diagnostics.
+      else if (proc._cancelled) reject(Object.assign(new Error('ffmpeg cancelled'), { cancelled: true }));
       else reject(new Error(`ffmpeg exited with code ${code}\n${stderr}`));
     });
   });
@@ -144,6 +166,51 @@ function scaleFilter(resolution) {
   return `scale=-2:'min(${h}\\,ih)':flags=lanczos`;
 }
 
+// Test whether ffmpeg can ACTUALLY encode with a codec + args on this machine
+// (encodes a throwaway 0.3s clip with the real args). Used so a GPU encoder that
+// isn't present / has a driver or argument mismatch fails the probe and we fall
+// back to software, instead of breaking the export.
+function canEncode(codecArgs) {
+  return new Promise((resolve) => {
+    if (!ffmpegPath) return resolve(false);
+    const proc = trackProc(spawn(ffmpegPath, ['-hide_banner', '-f', 'lavfi',
+      '-i', 'color=c=black:s=256x256:r=10:d=0.3', ...codecArgs, '-f', 'null', '-'],
+      { windowsHide: true }));
+    proc.on('error', () => resolve(false));
+    // A cancel/quit that kills the probe must not read as "encoder absent" — that
+    // would cache software-only for the whole session (see detectHwH264).
+    proc.on('close', (code) => resolve(proc._cancelled ? 'cancelled' : code === 0));
+  });
+}
+
+// Constant-quality H.264 args for a hardware encoder matched to a libx264 CRF.
+function hwH264Args(enc, crf) {
+  if (enc === 'h264_nvenc') return ['-c:v', 'h264_nvenc', '-preset', 'p5', '-tune', 'hq', '-rc', 'vbr', '-cq', String(crf), '-b:v', '0', '-pix_fmt', 'yuv420p'];
+  if (enc === 'h264_amf') return ['-c:v', 'h264_amf', '-quality', 'quality', '-rc', 'cqp', '-qp_i', String(crf), '-qp_p', String(crf), '-qp_b', String(crf), '-pix_fmt', 'yuv420p'];
+  if (enc === 'h264_qsv') return ['-c:v', 'h264_qsv', '-preset', 'slower', '-global_quality', String(crf), '-pix_fmt', 'yuv420p'];
+  return null;
+}
+
+// Detect a usable hardware H.264 encoder (NVIDIA NVENC / AMD AMF / Intel QSV),
+// probed once and cached. HW encoding is far faster than libx264 for the same
+// visual target — the main safe export speedup — with a software fallback so
+// machines without a supported GPU are unaffected.
+let hwH264Cache; // undefined = unprobed; encoder name or null
+async function detectHwH264() {
+  if (hwH264Cache !== undefined) return hwH264Cache;
+  hwH264Cache = null;
+  for (const enc of ['h264_nvenc', 'h264_amf', 'h264_qsv']) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await canEncode(hwH264Args(enc, 20));
+    if (r === 'cancelled') { hwH264Cache = undefined; return null; } // stay unprobed; re-probe next export
+    if (r) { hwH264Cache = enc; break; }
+  }
+  console.log(hwH264Cache
+    ? `[export] hardware video encoder: ${hwH264Cache} (GPU-accelerated)`
+    : '[export] no GPU H.264 encoder available — using software libx264');
+  return hwH264Cache;
+}
+
 function videoEncoder(format, quality) {
   if (format === 'webm') {
     const crf = { high: 24, balanced: 31, small: 37 }[quality] || 31;
@@ -152,6 +219,9 @@ function videoEncoder(format, quality) {
   const crf = { high: 18, balanced: 23, small: 28 }[quality] || 23;
   return ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', String(crf), '-preset', 'medium'];
 }
+
+// H.264 CRF for the given quality (used by both the software and HW paths).
+function h264Crf(quality) { return { high: 18, balanced: 23, small: 28 }[quality] || 23; }
 
 function audioEncoder(format, quality) {
   const ab = { high: '192k', balanced: '160k', small: '128k' }[quality] || '160k';
@@ -181,7 +251,7 @@ function youtubeVideoEncoder(height) {
 function probeViaStderr(filePath, fallback, parseFn) {
   return new Promise((resolve) => {
     if (!ffmpegPath) return resolve(fallback);
-    const proc = spawn(ffmpegPath, ['-hide_banner', '-i', filePath], { windowsHide: true });
+    const proc = trackProc(spawn(ffmpegPath, ['-hide_banner', '-i', filePath], { windowsHide: true }));
     let out = '';
     proc.stderr.on('data', (d) => (out += d.toString()));
     proc.on('error', () => resolve(fallback));
@@ -303,12 +373,18 @@ async function pickEncoders(format, quality, resolution, zoomedVideoPath) {
   }
   if (format === 'master') {
     // Near-visually-lossless H.264 — a clean source to re-edit (CapCut etc.)
-    // with lots of headroom so the next re-encode stays sharp.
-    return {
-      vEnc: ['-c:v', 'libx264', '-profile:v', 'high', '-pix_fmt', 'yuv420p', '-preset', 'slow', '-crf', '14'],
-      aEnc: ['-c:a', 'aac', '-b:a', '320k', '-ar', '48000', '-ac', '2'],
-      isMp4Container,
-    };
+    // with lots of headroom so the next re-encode stays sharp. Use the GPU
+    // encoder at a low CQ when available (a big speedup for this slow preset),
+    // else libx264 -preset slow.
+    const hw = await detectHwH264();
+    const vEnc = hw ? hwH264Args(hw, 15)
+      : ['-c:v', 'libx264', '-profile:v', 'high', '-pix_fmt', 'yuv420p', '-preset', 'slow', '-crf', '14'];
+    return { vEnc, aEnc: ['-c:a', 'aac', '-b:a', '320k', '-ar', '48000', '-ac', '2'], isMp4Container };
+  }
+  // mp4 / mov (H.264): use the GPU encoder at the quality's CRF when available.
+  if (format !== 'webm') {
+    const hw = await detectHwH264();
+    if (hw) return { vEnc: hwH264Args(hw, h264Crf(quality)), aEnc: audioEncoder(format, quality), isMp4Container };
   }
   return { vEnc: videoEncoder(format, quality), aEnc: audioEncoder(format, quality), isMp4Container };
 }
@@ -445,6 +521,8 @@ async function exportVideo({
   format = 'mp4',
   quality = 'balanced',
   resolution = 'original',
+  audioSyncMs = 0,
+  videoInputFps = 0,
   outputPath,
   onProgress,
 }) {
@@ -474,8 +552,13 @@ async function exportVideo({
   const noiseChain = voiceChainFor(noiseProfile, echoLevel);
 
   // Inputs: input 0 is always the rendered video; audio sources and the click
-  // sfx are appended as we discover we need them.
-  const args = ['-y', '-i', zoomedVideoPath];
+  // sfx are appended as we discover we need them. When the renderer produced a
+  // frame-exact JPEG stream (videoInputFps > 0) rather than a webm, read it as a
+  // fixed-rate image sequence so every frame gets a rigid 1/fps slot — that grid
+  // is what keeps the picture locked to the sample-exact audio.
+  const args = ['-y'];
+  if (videoInputFps > 0) args.push('-f', 'image2pipe', '-framerate', String(videoInputFps));
+  args.push('-i', zoomedVideoPath);
   let inputCount = 1;
   const addInput = (p) => { args.push('-i', p); return inputCount++; };
 
@@ -490,8 +573,24 @@ async function exportVideo({
     parts, addInput, voiceLabel, overlayLabels, chLayout, useClicks, clicks, clickSoundName, clickVolume, durationSec,
   });
 
+  // User's export audio-sync nudge: shift the whole soundtrack against the
+  // (untouched) picture. Positive delays the audio — prepend that many ms of
+  // silence — for when the voice runs ahead of the lips; negative advances it —
+  // drop that much from the front. `-shortest` trims the small tail-length
+  // mismatch either shift leaves. No-op at 0 (the common case).
+  let finalAudio = audioLabel;
+  const syncMs = Math.round(Number(audioSyncMs) || 0);
+  if (finalAudio && syncMs !== 0) {
+    if (syncMs > 0) {
+      parts.push(`${finalAudio}adelay=${syncMs}:all=1[async]`);
+    } else {
+      parts.push(`${finalAudio}atrim=start=${(Math.abs(syncMs) / 1000).toFixed(3)},asetpts=PTS-STARTPTS[async]`);
+    }
+    finalAudio = '[async]';
+  }
+
   args.push('-filter_complex', parts.join(';'));
-  if (audioLabel) args.push('-map', '[vout]', '-map', audioLabel, ...vEnc, ...aEnc);
+  if (finalAudio) args.push('-map', '[vout]', '-map', finalAudio, ...vEnc, ...aEnc);
   else args.push('-map', '[vout]', ...vEnc, '-an');
 
   // Force constant frame rate so the intermediate (captured at the monitor's
@@ -523,4 +622,4 @@ function probeHasAudio(filePath) {
   return probeViaStderr(filePath, false, (out) => /Stream #\d+:\d+.*: Audio:/.test(out));
 }
 
-module.exports = { exportVideo, exportCleanAudio, probeHasAudio };
+module.exports = { exportVideo, exportCleanAudio, probeHasAudio, killAllFfmpeg };

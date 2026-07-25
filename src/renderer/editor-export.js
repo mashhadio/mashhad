@@ -3,10 +3,38 @@
 // editor-export.js — part of the editor.js module split (see editor.html for load order).
 // Export: render the zoom/cam/scene composite to a temp file, then hand it to the main process to mux + encode.
 
+// Quality for the intermediate JPEG frame stream both frame-exact paths emit.
+// It's re-encoded by ffmpeg into the final file, so this only needs to preserve
+// enough detail for that pass — one shared constant so the two paths can't drift.
+const EXPORT_JPEG_QUALITY = 0.92;
+
 // Export
 // ---------------------------------------------------------------------------
 async function runExport() {
   if (exporting || !clips.length) return;
+
+  // A clip whose source file was missing when the project opened is absent from
+  // `sources` (see applyPendingProject — it's shelved in preservedSources with a
+  // null URL). Left alone, that clip collapses to ~0s of picture during the
+  // real-time capture while ffmpeg still lays down its full audio span, shoving
+  // everything after it out of sync — and silently, since preview is timeline-
+  // driven and looks fine. Refuse to export and name the file(s) to restore
+  // rather than writing a broken, desynced video.
+  const missingIds = [...new Set(
+    [...clips, ...allOverlayClips(), ...allAudioClips()]
+      .map((c) => c.sourceId)
+      .filter((id) => !sourceById(id))
+  )];
+  if (missingIds.length) {
+    const names = missingIds.map((id) => {
+      const p = (preservedSources || []).find((s) => s.id === id);
+      return p && p.name ? p.name : id;
+    });
+    exportStatus.textContent = `تعذّر التصدير — ملف مصدر مفقود: ${names.join('، ')}`;
+    alert(`تعذّر التصدير: تعذّر العثور على ملف المصدر:\n${names.join('\n')}\n\nتأكد من وجود الملف ثم أعد فتح المشروع.`);
+    return;
+  }
+
   exporting = true;
   pause();
   // Capture from the first clip's source.
@@ -32,10 +60,33 @@ async function runExport() {
   // on ANY failure — including one during the capture phase itself, before the
   // ffmpeg call even starts — so it's all one try/catch/finally.
   let off = () => {};
+  // Frame-EXACT picture path: render every output frame at its exact time and hand
+  // ffmpeg a fixed-rate frame stream, so the picture can't drift against the
+  // sample-exact audio (unlike the real-time MediaRecorder capture, whose frame
+  // timing the browser controls). Handles clip transitions too (the loop freezes
+  // the outgoing frame at each seam, like the real-time path). Still excludes
+  // scene composites (their time-based crossfades need the real-time loop) and
+  // GIF (its own path). captureFps is echoed to ffmpeg as the input rate.
+  const hasTrans = clips.some((c, i) => i > 0 && c.transition && c.transition.type && c.transition.type !== 'none');
+  const hasScenes = typeof sceneEvents !== 'undefined' && Array.isArray(sceneEvents) && sceneEvents.length > 0;
+  const frameExact = !hasScenes && exportFormat.value !== 'gif';
+  const captureFps = canvas.height > 1080 ? 30 : 60;
+  console.log(`[export] picture path = ${frameExact ? 'frame-EXACT (deterministic)' : 'real-time capture'} | hasTrans=${hasTrans} hasScenes=${hasScenes} format=${exportFormat.value}`);
   try {
-    const zoomedVideoPath = await renderZoomedWebm((p) => {
-      setProgress(p * 60, 'جارٍ تجهيز اللقطات');
-    }, interBitrate);
+    let zoomedVideoPath;
+    if (frameExact) {
+      // Fast + exact: play each clip and capture frames by content time. Falls back
+      // to the slow seek-based renderer only if it fails partway (e.g. play blocked).
+      try {
+        zoomedVideoPath = await renderFramesByPlaying((p) => setProgress(p * 60, 'جارٍ تجهيز اللقطات (سريع)'), captureFps);
+      } catch (playErr) {
+        console.warn('[export] play-based capture failed, falling back to seek-based:', playErr && playErr.message);
+        zoomedVideoPath = await renderZoomedFrames((p) => setProgress(p * 60, 'جارٍ تجهيز اللقطات (مزامنة دقيقة)'), captureFps);
+      }
+    } else {
+      // Scene composites: the real-time compositing loop.
+      zoomedVideoPath = await renderZoomedWebm((p) => setProgress(p * 60, 'جارٍ تجهيز اللقطات'), interBitrate);
+    }
 
     setProgress(60, 'جارٍ الترميز وتنقية الصوت');
 
@@ -88,6 +139,8 @@ async function runExport() {
         format: exportFormat.value,
         quality: exportQuality.value,
         resolution: exportResolution.value,
+        audioSyncMs: parseInt(audioSync.value, 10) || 0,
+        videoInputFps: frameExact ? captureFps : 0,
       },
     });
     off();
@@ -123,10 +176,32 @@ async function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
   lastDrawnScene = null; sceneXfadeFrom = null; // fresh scene-crossfade state
   await window.api.beginExportCapture();
   return new Promise((resolve, reject) => {
-    // captureStream(0) = manual mode: we push exactly one frame per drawn frame
-    // via requestFrame(), so no empty/duplicated frames sneak into the encoder.
-    const stream = canvas.captureStream(0);
-    const track = stream.getVideoTracks()[0];
+    // Frame source. Preferred (frame-accurate): a MediaStreamTrackGenerator we
+    // hand VideoFrames to, each stamped with its exact TIMELINE time — so ffmpeg
+    // lays every frame at its true position against the sample-exact audio, with
+    // none of the real-time-capture drift that made the picture creep ahead of
+    // the voice. We still render in real time (all the zoom/cam/transition/scene
+    // compositing below is unchanged) — only the timestamp is now content-time
+    // instead of wall-clock. Fallback (engines without MediaStreamTrackGenerator/
+    // VideoFrame): captureStream(0) manual mode + requestFrame(), the wall-clock
+    // path that drifts slightly — kept only so export still works there.
+    let writer = null, track = null, stream = null;
+    try {
+      if (typeof MediaStreamTrackGenerator === 'function' && typeof VideoFrame === 'function') {
+        const generator = new MediaStreamTrackGenerator({ kind: 'video' });
+        writer = generator.writable.getWriter();
+        stream = new MediaStream([generator]);
+      }
+    } catch (_) { writer = null; }
+    if (!writer) {
+      // captureStream(0) = manual mode: exactly one frame per drawn frame via
+      // requestFrame(), so no empty/duplicated frames sneak into the encoder.
+      stream = canvas.captureStream(0);
+      track = stream.getVideoTracks()[0];
+    }
+    const exactFrames = !!writer;
+    console.log(`[export] frame-accurate timing: ${exactFrames ? 'ON (VideoFrame timestamps)' : 'OFF (fallback wall-clock capture)'}`);
+    let lastTs = -1; // last VideoFrame timestamp (µs); kept strictly increasing
     // Capture as VP8, NOT VP9. This intermediate is re-encoded by ffmpeg into the
     // final file, so its codec only needs to be fast. Chromium has no GPU encoder
     // for MediaRecorder VP9 (software-only), so at these bitrates VP9 can't encode
@@ -151,6 +226,7 @@ async function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
       capturing = false;
       pauseOverlayEls();
       updateAudioRouting(); // restore preview audio routing
+      if (writer) { try { writer.close(); } catch (_) {} }
       try {
         await chunkWriteQueue; // wait for every chunk to reach disk
         resolve(await window.api.endExportCapture());
@@ -168,11 +244,29 @@ async function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
       capturing = false;
       pauseOverlayEls();
       updateAudioRouting();
+      if (writer) { try { writer.close(); } catch (_) {} }
       window.api.abortExportCapture().catch(() => {}); // clean up the half-written temp file
       reject(e.error || new Error('خطأ في المُسجِّل'));
     };
 
-    const pushFrame = () => { if (track.requestFrame) track.requestFrame(); };
+    // Emit one frame. Frame-accurate path: wrap the canvas in a VideoFrame stamped
+    // at timeline time `te` (seconds), so its position in the file is exact. The
+    // fallback just requests a wall-clock frame. `te` is ignored in the fallback.
+    const pushFrame = (te) => {
+      if (exactFrames) {
+        let ts = Math.round(Math.max(0, te || 0) * 1e6);
+        if (ts <= lastTs) ts = lastTs + 1; // encoders require strictly increasing PTS
+        lastTs = ts;
+        let vf;
+        try { vf = new VideoFrame(canvas, { timestamp: ts }); } catch (_) { return; }
+        // Fire-and-forget with backpressure; close the frame once accepted so its
+        // buffer is freed (writes resolve quickly at capture rate).
+        writer.write(vf).then(() => { try { vf.close(); } catch (_) {} },
+          () => { try { vf.close(); } catch (_) {} });
+      } else if (track && track.requestFrame) {
+        track.requestFrame();
+      }
+    };
 
     // Adaptive capture rate. The export encodes the canvas in REAL TIME via
     // MediaRecorder (software-encoded — no GPU path). At ≤1080p most machines
@@ -286,7 +380,7 @@ async function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
         drawAt(video.currentTime);
         updateOverlayPlayback(teNow); // drive overlay elements (muted) alongside
         drawOverlays(teNow);          // composite the top overlay layer
-        pushFrame();
+        pushFrame(teNow);
         if (onProgress && total) onProgress(Math.min(1, teNow / total));
       }
       requestAnimationFrame(step);
@@ -304,7 +398,7 @@ async function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
       // 250ms) instead of buffering the whole capture and firing one huge
       // dataavailable at stop() — the reason this could be streamed at all.
       rec.start(1000);
-      pushFrame();
+      pushFrame(0);
       video.play();
       // The webcam belongs to the recording; only run it when the first clip is
       // a recording clip (the seam re-syncs it as later recording clips arrive).
@@ -318,6 +412,190 @@ async function renderZoomedWebm(onProgress, bitrate = 16_000_000) {
     // Seek to the first clip (a no-op if we're already there), then start.
     seekAndWait(video, startAt, { timeoutMs: 1500, epsilon: 0.05 }).then(begin);
   });
+}
+
+// Frame-EXACT capture (see the frameExact branch in runExport). Renders every
+// output frame deterministically — seek each source element to the frame's exact
+// time, draw the same composite the preview uses, and stream the frame as a JPEG —
+// instead of screen-recording the canvas in real time. ffmpeg reads the JPEGs at a
+// fixed frame rate (exportVideo's image2pipe input), so each frame lands on an
+// exact grid aligned with the sample-exact audio: the picture cannot drift. Reuses
+// the same begin/chunk/end capture IPC as the real-time path — only the payload is
+// a JPEG stream instead of a webm. No transitions/scenes here (runExport gates it).
+async function renderZoomedFrames(onProgress, fps) {
+  capturing = true;
+  transSnapIdx = -1;
+  lastDrawnScene = null; sceneXfadeFrom = null;
+  await window.api.beginExportCapture();
+  const toJpeg = () => new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/jpeg', EXPORT_JPEG_QUALITY);
+  });
+  try {
+    const total = editedDuration();
+    const N = Math.max(1, Math.round(total * fps));
+    console.log(`[export] frame-EXACT render: ${N} frames @ ${fps}fps (deterministic; picture locked to audio)`);
+    video.pause();
+    video.muted = true;
+    if (camReady) camVideo.pause();
+    let activeId = null;
+    let prevIdx = -1;
+    for (let i = 0; i < N; i++) {
+      const te = Math.min(total - 1e-4, i / fps);
+      const m = editedToSource(te);
+      if (m.clip.sourceId !== activeId) { setActiveEl(m.clip.sourceId); video.muted = true; activeId = m.clip.sourceId; }
+      // Land the picture element(s) on this frame's exact source time before drawing.
+      // (Seeking doesn't touch the canvas, so it still holds the previous frame.)
+      await seekAndWait(video, m.src, { timeoutMs: 3000, epsilon: 0.25 / fps });
+      if (activeIsRecording() && camReady) {
+        try { await seekAndWait(camVideo, camTimeFor(m.src), { timeoutMs: 1500, epsilon: 0.25 / fps }); } catch (_) {}
+      }
+      // Crossing into a new clip: freeze the outgoing frame (the previous
+      // iteration's, still on the canvas) so this clip's intro transition can
+      // dissolve it — exactly what the real-time path does at each seam.
+      if (m.idx !== prevIdx && prevIdx >= 0) snapshotOutgoing(m.idx);
+      drawClipIdx = m.idx;
+      drawAt(m.src);           // draws the incoming frame + composites the transition if in-window
+      updateOverlayPlayback(te);
+      drawOverlays(te);
+      const blob = await toJpeg();
+      await window.api.sendExportChunk(await blob.arrayBuffer());
+      if (onProgress) onProgress((i + 1) / N);
+      prevIdx = m.idx;
+    }
+    capturing = false;
+    pauseOverlayEls();
+    updateAudioRouting();
+    return await window.api.endExportCapture();
+  } catch (err) {
+    capturing = false;
+    pauseOverlayEls();
+    updateAudioRouting();
+    try { await window.api.abortExportCapture(); } catch (_) {}
+    throw err;
+  }
+}
+
+// FAST frame-exact capture: instead of seeking to every frame (slow — precise
+// seeks re-decode from a keyframe each time), PLAY each clip once (sequential
+// decode ≈ real time) and sample it on requestAnimationFrame, reading the frame's
+// source time from video.currentTime (the same mechanism preview uses, which works
+// for the off-screen source elements). Each sample is placed on the fixed output
+// grid BY CONTENT TIME (hold the last frame to fill each 1/fps slot), so the picture
+// stays locked to the sample-exact audio — no drift, just faster. If a machine can't
+// encode as fast as it plays, it captures fewer unique frames and holds them
+// (slightly choppy) rather than desyncing. Handles transitions via the same
+// snapshotOutgoing seam trick as the deterministic path. ffmpeg reads the JPEGs at
+// `fps` (image2pipe). runExport falls back to the seek-based renderer if this throws.
+async function renderFramesByPlaying(onProgress, fps) {
+  capturing = true;
+  transSnapIdx = -1;
+  lastDrawnScene = null; sceneXfadeFrom = null;
+  await window.api.beginExportCapture();
+  const total = editedDuration();
+  const N = Math.max(1, Math.round(total * fps));
+  console.log(`[export] FAST play-based render: ${N} frames @ ${fps}fps (played, picture locked to audio)`);
+  let nextSlot = 0;
+  let sendQueue = Promise.resolve();
+  let sendErr = null;
+  let processed = 0;
+
+  // Encode the CURRENT canvas once (as a JPEG) and queue it for `count` output
+  // slots — a held frame duplicated across the slots it covers. toBlob captures the
+  // canvas bitmap synchronously at call time, so encoding the previous frame can't
+  // race the next draw; the sends are chained on sendQueue so they stay in order.
+  // CRITICAL: ffmpeg's image2pipe assigns frame N to slot N by position, so we must
+  // send EXACTLY one buffer per slot — a dropped frame would shift every later frame
+  // and desync. If an encode ever fails, resend the last good frame (never skip).
+  let lastBuf = null;
+  const emit = (count) => {
+    if (count <= 0) return;
+    const bufP = new Promise((resolve) => {
+      canvas.toBlob((b) => {
+        if (!b) { resolve(lastBuf); return; }
+        b.arrayBuffer().then((ab) => { lastBuf = ab; resolve(ab); }, () => resolve(lastBuf));
+      }, 'image/jpeg', EXPORT_JPEG_QUALITY);
+    });
+    for (let c = 0; c < count; c++) {
+      sendQueue = sendQueue
+        .then(() => bufP)
+        .then((buf) => {
+          if (buf) return window.api.sendExportChunk(buf);
+          sendErr = sendErr || new Error('frame encode failed'); // only if the very first frame fails
+        })
+        .catch((e) => { sendErr = sendErr || e; });
+    }
+  };
+  const nextRaf = () => new Promise((res) => requestAnimationFrame(res));
+
+  try {
+    video.pause(); video.muted = true;
+    if (camReady) camVideo.pause();
+    let base = 0; // edited (timeline) start of the current clip
+    for (let idx = 0; idx < clips.length; idx++) {
+      const c = clips[idx];
+      const sp = c.speed || 1;
+      const clipEndTe = Math.min(total, base + (c.end - c.start) / sp);
+      setActiveEl(c.sourceId); video.muted = true;
+      // No `force`: writing the same currentTime fires no 'seeked' and would hang
+      // until the timeout. The exact landing spot doesn't matter — we read each
+      // frame's true time from rVFC below.
+      await seekAndWait(video, c.start, { timeoutMs: 3000, epsilon: 0.02 });
+      if (idx > 0) snapshotOutgoing(idx); // freeze outgoing frame for this clip's transition
+      drawClipIdx = idx;
+      const isRec = activeIsRecording();
+      if (isRec && camReady) {
+        try { camVideo.currentTime = camTimeFor(c.start); camVideo.playbackRate = sp * camDurRatio(); await camVideo.play().catch(() => {}); } catch (_) {}
+      } else if (camReady && !camVideo.paused) { camVideo.pause(); }
+      // Draw the clip's start frame now, so its slots are never filled with the
+      // previous clip's frame if play()/the frame callback stalls.
+      drawAt(c.start); updateOverlayPlayback(base); drawOverlays(base);
+      video.playbackRate = sp;
+      await video.play().catch(() => {});
+      // Play through the clip, emitting output slots by content time (hold-behind).
+      // Captured via requestAnimationFrame + video.currentTime — the same mechanism
+      // preview uses, which works for these off-screen source elements (unlike
+      // requestVideoFrameCallback, which needs an on-screen video to fire).
+      let stall = 0, lastSrc = -1;
+      for (;;) {
+        await nextRaf();
+        const src = video.currentTime;
+        if (video.ended || src >= c.end - 1e-3) break;
+        // Bail if playback isn't advancing (paused/stalled/backgrounded RAF), so a
+        // stuck clip can't spin forever — its remaining slots get hold-filled below.
+        if (src <= lastSrc + 1e-4) { if (++stall > 180) break; } else { stall = 0; lastSrc = src; }
+        const te = base + (src - c.start) / sp;
+        let count = 0;
+        while ((nextSlot / fps) < te && nextSlot < N) { count++; nextSlot++; } // slots for the PREVIOUS frame (canvas as-is)
+        emit(count);
+        drawClipIdx = idx;
+        drawAt(src);              // draw this frame (+ transition composite while in-window)
+        updateOverlayPlayback(te);
+        drawOverlays(te);
+        if (onProgress && (processed % 5 === 0)) onProgress(Math.min(1, nextSlot / N)); // keep the bar moving within long clips
+        if (++processed % 30 === 0) { await sendQueue; if (sendErr) throw sendErr; } // bound memory / pace to disk
+      }
+      video.pause();
+      if (camReady && !camVideo.paused) camVideo.pause();
+      // Fill the rest of this clip's slots with the last drawn frame.
+      let count = 0;
+      while ((nextSlot / fps) < clipEndTe && nextSlot < N) { count++; nextSlot++; }
+      emit(count);
+      base = clipEndTe;
+      if (onProgress) onProgress(Math.min(1, base / total));
+    }
+    // Flush any trailing slots (rounding) with the final frame.
+    let tail = 0;
+    while (nextSlot < N) { tail++; nextSlot++; }
+    emit(tail);
+    capturing = false; pauseOverlayEls(); updateAudioRouting();
+    await sendQueue;
+    if (sendErr) throw sendErr;
+    return await window.api.endExportCapture();
+  } catch (err) {
+    capturing = false; pauseOverlayEls(); updateAudioRouting();
+    try { await window.api.abortExportCapture(); } catch (_) {}
+    throw err;
+  }
 }
 
 exportBtn.addEventListener('click', runExport);
