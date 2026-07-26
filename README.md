@@ -218,6 +218,40 @@ Then launch **Mashhad** from your applications menu (or run `Mashhad` in a termi
 
 ---
 
+## Auto-update & distribution
+
+New versions reach users automatically where possible. The **source repo can stay private**
+while only the compiled installers are served from a **public** channel — so updates need no
+embedded credentials.
+
+| Platform | How users get updates |
+|---|---|
+| **Windows** (NSIS) | In-app auto-update — a banner offers **restart to update** |
+| **Linux** AppImage | In-app auto-update (when run as a real AppImage) |
+| **Linux** `.deb` | Reinstall the newer package (no in-app updater) |
+| **macOS** | Homebrew — `brew upgrade --cask mashhad` |
+
+The in-app updater ([`src/main/updater.js`](src/main/updater.js)) reads a public **GitLab
+generic Package Registry** feed (a separate `mashhad-releases` project);
+[`scripts/publish-release.js`](scripts/publish-release.js) (`npm run publish`) uploads each
+build there. macOS goes through the Homebrew tap scaffolded in
+[`homebrew-mashhad/`](homebrew-mashhad/).
+
+📄 **Full setup + per-release runbook: [`docs/distribution-setup.html`](docs/distribution-setup.html)**
+(open in a browser) — the one-time setup (make the repo private, create the public
+`mashhad-releases` + `homebrew-mashhad` repos, add the `RELEASES_TOKEN` CI variable, publish a
+first release) and how to cut each release.
+
+**Releasing (quick reference):**
+```bash
+# bump "version" in package.json, commit, then:
+git tag vX.Y.Z && git push && git push --tags          # Linux builds + publishes via CI
+npm run dist:win && RELEASES_TOKEN=… npm run publish    # Windows (built + published locally)
+# macOS (on a Mac): npm run dist:mac && npm run publish, then bump the Homebrew cask version+sha256
+```
+
+---
+
 ## Project layout
 
 ```

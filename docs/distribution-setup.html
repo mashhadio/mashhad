@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mashhad — Auto-update & Distribution Setup</title>
+<style>
+  :root {
+    --bg:#0d1117; --card:#161b22; --border:#30363d; --fg:#e6edf3; --muted:#9198a1;
+    --accent:#58a6ff; --accent2:#3fb950; --warn:#d29922; --code:#1f2630; --danger:#f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#ffffff; --card:#f6f8fa; --border:#d0d7de; --fg:#1f2328; --muted:#59636e;
+            --accent:#0969da; --accent2:#1a7f37; --warn:#9a6700; --code:#f0f3f6; --danger:#cf222e; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:860px; margin:0 auto; padding:40px 22px 80px; }
+  h1 { font-size:2rem; margin:0 0 4px; letter-spacing:-.01em; }
+  h2 { font-size:1.3rem; margin:2.4em 0 .6em; padding-bottom:.3em; border-bottom:1px solid var(--border); }
+  h3 { font-size:1.05rem; margin:1.6em 0 .4em; }
+  p, li { color:var(--fg); }
+  .lead { color:var(--muted); font-size:1.05rem; margin:.2em 0 0; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  code { background:var(--code); padding:.12em .4em; border-radius:5px; font-size:.9em;
+    font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:10px; padding:14px 16px;
+    overflow-x:auto; margin:.6em 0; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:.6em 0; font-size:.95rem; display:block; overflow-x:auto; }
+  th, td { border:1px solid var(--border); padding:8px 12px; text-align:left; vertical-align:top; }
+  th { background:var(--card); }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:2px 20px; margin:1em 0; }
+  .note { border-left:4px solid var(--accent); background:var(--card); padding:2px 16px; border-radius:0 8px 8px 0; margin:1em 0; }
+  .warn { border-left-color:var(--warn); }
+  .danger { border-left-color:var(--danger); }
+  .pill { display:inline-block; font-size:.75rem; font-weight:600; padding:.15em .6em; border-radius:999px;
+    background:var(--code); border:1px solid var(--border); color:var(--muted); }
+  ol.steps { counter-reset:s; list-style:none; padding-left:0; }
+  ol.steps > li { counter-increment:s; position:relative; padding:14px 16px 14px 56px; margin:12px 0;
+    background:var(--card); border:1px solid var(--border); border-radius:12px; }
+  ol.steps > li::before { content:counter(s); position:absolute; left:16px; top:14px; width:26px; height:26px;
+    border-radius:50%; background:var(--accent); color:#fff; font-weight:700; font-size:.9rem;
+    display:grid; place-items:center; }
+  .muted { color:var(--muted); }
+  .ok { color:var(--accent2); font-weight:600; }
+  footer { margin-top:60px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:.9rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>مشهد (Mashhad) — Auto-update &amp; Distribution</h1>
+  <p class="lead">How new versions reach users, the one-time setup, and the per-release runbook.</p>
+
+  <div class="note">
+    <p><strong>Model:</strong> the <em>source repo stays private</em>, but the <em>compiled installers +
+    update metadata are served from a public channel</em> so the app (and Homebrew) can fetch updates
+    with no credentials. Publishing binaries does not expose the private repo.
+    <span class="muted">(An Electron installer's <code>app.asar</code> is extractable by any user regardless —
+    this hides the repo, not the shipped JS.)</span></p>
+  </div>
+
+  <h2>How updates reach each platform</h2>
+  <table>
+    <tr><th>Platform</th><th>Mechanism</th><th>Notes</th></tr>
+    <tr><td><strong>Windows</strong> (NSIS <code>.exe</code>)</td><td>In-app auto-update (electron-updater)</td>
+        <td>One-click "restart to update". SmartScreen warning while unsigned.</td></tr>
+    <tr><td><strong>Linux</strong> AppImage</td><td>In-app auto-update</td>
+        <td>Works only when run as a real AppImage (the <code>APPIMAGE</code> env var is set).</td></tr>
+    <tr><td><strong>Linux</strong> <code>.deb</code></td><td>None (apt / manual)</td>
+        <td>The in-app updater is disabled; update via your package manager or a new <code>.deb</code>.</td></tr>
+    <tr><td><strong>macOS</strong></td><td>Homebrew Cask</td>
+        <td><code>brew upgrade --cask mashhad</code>. No in-app updater (that needs Apple signing).</td></tr>
+  </table>
+  <p>The in-app updater checks the feed on launch, downloads in the background, and shows an Arabic
+    banner with an <strong>«أعد التشغيل للتحديث»</strong> (Restart to update) button. It is a no-op in
+    development and on unsupported targets.</p>
+
+  <h2>The update feed</h2>
+  <p>The feed is a <strong>public GitLab generic Package Registry</strong> in a separate
+    <code>mashhad-releases</code> project, at a fixed <code>latest</code> slot. The app is pointed at it via
+    <code>build.publish</code> in <code>package.json</code>:</p>
+  <pre><code>https://gitlab.com/api/v4/projects/abdu.medhat94%2Fmashhad-releases/packages/generic/mashhad/latest</code></pre>
+  <p class="muted">electron-updater reads <code>…/latest/latest.yml</code> (or <code>latest-linux.yml</code>)
+    and pulls the installer listed beside it. Each publish also uploads a version-pinned copy
+    (<code>…/&lt;version&gt;/…</code>) that the Homebrew cask points at.</p>
+
+  <h2>One-time setup <span class="pill">do these first — nothing updates until they're done</span></h2>
+  <ol class="steps">
+    <li><strong>Make the source repo private.</strong>
+      <code>smooth-screen-record</code> → <em>Settings → General → Visibility, project features, permissions →
+      Project visibility → Private</em>.</li>
+    <li><strong>Create a public releases project.</strong> A new GitLab project
+      <code>abdu.medhat94/mashhad-releases</code>, visibility <em>Public</em>. It can be empty — the generic
+      Package Registry needs no commits.</li>
+    <li><strong>Create the Homebrew tap repo.</strong> A new public repo
+      <code>abdu.medhat94/homebrew-mashhad</code> (the <code>homebrew-</code> prefix is required). Push the
+      contents of the <code>homebrew-mashhad/</code> folder from this repo into it.</li>
+    <li><strong>Add the publish token.</strong> In the <em>source</em> repo, <em>Settings → CI/CD → Variables</em>,
+      add <code>RELEASES_TOKEN</code> (masked, protected) — a Project/Group Access Token or PAT with
+      <code>api</code> scope and <em>write</em> access to <code>mashhad-releases</code>. The CI job and the local
+      publish script both use it.</li>
+    <li><strong>Publish a first release.</strong> Clients can only update <em>from</em> something already on
+      the feed — see the runbook below.</li>
+  </ol>
+
+  <h2>Releasing a new version</h2>
+  <p>Bump the version first so the tag, <code>latest.yml</code>, and the Homebrew cask all match:</p>
+  <pre><code># 1) bump "version" in package.json (e.g. 0.1.0 -> 0.1.1), commit, and tag
+git commit -am "release 0.1.1"
+git tag v0.1.1 &amp;&amp; git push &amp;&amp; git push --tags</code></pre>
+
+  <h3>Windows <span class="muted">(built &amp; published locally — no Windows CI runner)</span></h3>
+  <pre><code>npm run dist:win                         # builds dist/Mashhad-&lt;version&gt;-x64.exe + latest.yml
+RELEASES_TOKEN=&lt;token&gt; npm run publish    # uploads exe + blockmap + latest.yml to the feed</code></pre>
+
+  <h3>Linux <span class="muted">(automatic on the pushed tag)</span></h3>
+  <p>The <code>build:linux</code> CI job builds the AppImage/<code>.deb</code> and runs
+    <code>npm run publish</code> for you (using <code>RELEASES_TOKEN</code>). Nothing to do beyond pushing the tag.</p>
+
+  <h3>macOS <span class="muted">(on a Mac — can't be cross-built)</span></h3>
+  <pre><code>npm run dist:mac                         # dist/Mashhad-&lt;version&gt;-arm64.dmg (+ .zip)
+RELEASES_TOKEN=&lt;token&gt; npm run publish
+shasum -a 256 dist/Mashhad-&lt;version&gt;-arm64.dmg   # copy the hash</code></pre>
+  <p>Then in <code>homebrew-mashhad/Casks/mashhad.rb</code> set <code>version</code> and <code>sha256</code>,
+    commit, and push the tap.</p>
+
+  <div class="note warn">
+    <p><strong>Verify an update end-to-end:</strong> install an <em>older</em> version than what's on the feed,
+    launch it → the banner should appear, download, and the restart button installs the new build. Confirm
+    the feed is reachable: open <code>…/mashhad/latest/latest.yml</code> in a browser (should download/show).</p>
+  </div>
+
+  <h2>How users install &amp; update</h2>
+
+  <h3>Windows</h3>
+  <p>Download and run <code>Mashhad-&lt;version&gt;-x64.exe</code>. Updates apply automatically in-app
+    (banner → <em>Restart to update</em>).</p>
+
+  <h3>Linux</h3>
+  <pre><code>chmod +x Mashhad-&lt;version&gt;-x86_64.AppImage &amp;&amp; ./Mashhad-&lt;version&gt;-x86_64.AppImage</code></pre>
+  <p>AppImage updates in-app. For the <code>.deb</code>, reinstall the newer package.</p>
+
+  <h3>macOS (Homebrew)</h3>
+  <pre><code>brew tap abdu.medhat94/mashhad https://gitlab.com/abdu.medhat94/homebrew-mashhad.git
+brew install --cask mashhad     # install
+brew upgrade --cask mashhad     # update</code></pre>
+
+  <h2>Notes &amp; caveats</h2>
+  <ul>
+    <li><span class="pill">unsigned</span> Windows shows a SmartScreen prompt; macOS is Gatekeeper-quarantined
+      (the cask clears the quarantine flag automatically). Real signing/notarization is a separate, later step.</li>
+    <li>Versions must stay in lock-step: <code>package.json</code> version = git tag = filename = Homebrew cask
+      <code>version</code>.</li>
+    <li>The build scripts run <code>electron-builder … -p never</code> — they generate <code>latest.yml</code>
+      but never upload; uploading is done only by <code>scripts/publish-release.js</code>.</li>
+    <li>The repo has been public in the past, so treat any previously committed secret as exposed and rotate it.</li>
+  </ul>
+
+  <footer>
+    Generated for the مشهد (Mashhad) project · see <code>README.md</code>,
+    <code>scripts/publish-release.js</code>, and <code>src/main/updater.js</code>.
+  </footer>
+
+</div>
+</body>
+</html>
