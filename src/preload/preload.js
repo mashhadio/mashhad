@@ -83,6 +83,14 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('shortcut:toggle-record', handler);
   },
 
+  // auto-update status (main -> renderer) + user-triggered restart-to-install
+  onUpdateStatus: (cb) => {
+    const handler = (_e, status) => cb(status);
+    ipcRenderer.on('update:status', handler);
+    return () => ipcRenderer.removeListener('update:status', handler);
+  },
+  restartToUpdate: () => ipcRenderer.invoke('update:restart'),
+
   // window focus changes (used to pause live previews in the background)
   onWindowFocus: (cb) => {
     const handler = (_e, focused) => cb(focused);

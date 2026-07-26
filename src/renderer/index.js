@@ -1422,6 +1422,37 @@ window.addEventListener('keydown', (e) => {
   else if ((e.key === '?' || e.key === '؟') && !typing) toggleShortcuts(true);
 });
 
+// Auto-update banner (packaged Windows/AppImage only; main stays silent otherwise).
+// States: available -> downloading (%) -> ready (show restart button) | error.
+if (window.api.onUpdateStatus) {
+  const updateBanner = document.getElementById('updateBanner');
+  const updateTitle = document.getElementById('updateTitle');
+  const updateDetail = document.getElementById('updateDetail');
+  const updateRestartBtn = document.getElementById('updateRestartBtn');
+  updateRestartBtn.addEventListener('click', () => {
+    updateDetail.textContent = 'جارٍ إعادة التشغيل…';
+    updateRestartBtn.disabled = true;
+    window.api.restartToUpdate();
+  });
+  window.api.onUpdateStatus((s) => {
+    if (!s || !s.state) return;
+    if (s.state === 'error') { updateBanner.classList.remove('active'); return; }
+    updateBanner.classList.add('active');
+    if (s.state === 'available') {
+      updateTitle.textContent = `يتوفّر تحديث جديد${s.version ? ` (${s.version})` : ''}.`;
+      updateDetail.textContent = 'جارٍ التنزيل…';
+      updateRestartBtn.style.display = 'none';
+    } else if (s.state === 'downloading') {
+      updateDetail.textContent = `جارٍ تنزيل التحديث… ${s.percent || 0}%`;
+      updateRestartBtn.style.display = 'none';
+    } else if (s.state === 'ready') {
+      updateTitle.textContent = `تم تنزيل التحديث${s.version ? ` (${s.version})` : ''}.`;
+      updateDetail.textContent = 'أعد تشغيل التطبيق لتثبيت النسخة الجديدة.';
+      updateRestartBtn.style.display = '';
+    }
+  });
+}
+
 // Global start/stop hotkey (fires even when the app isn't focused).
 if (window.api.onToggleRecord) {
   window.api.onToggleRecord(() => toggleRecord());

@@ -8,10 +8,12 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder",
-    "dist:win": "electron-builder --win",
-    "dist:mac": "electron-builder --mac",
-    "dist:linux": "electron-builder --linux",
+    "dist": "electron-builder -p never",
+    "dist:win": "electron-builder --win -p never",
+    "dist:mac": "electron-builder --mac -p never",
+    "dist:linux": "electron-builder --linux -p never",
+    "publish": "node scripts/publish-release.js",
+    "publish:win": "node scripts/publish-release.js",
     "icons": "node scripts/make-icons.js",
     "logo": "node scripts/make-logo.js"
   },
@@ -25,6 +27,7 @@
   },
   "dependencies": {
     "@mediapipe/selfie_segmentation": "^0.1.1675465747",
+    "electron-updater": "^6.8.9",
     "ffmpeg-static": "^5.2.0",
     "uiohook-napi": "^1.5.4"
   },
@@ -42,6 +45,12 @@
       "node_modules/ffmpeg-static/**",
       "node_modules/uiohook-napi/**",
       "assets/**"
+    ],
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://gitlab.com/api/v4/projects/abdu.medhat94%2Fmashhad-releases/packages/generic/mashhad/latest"
+      }
     ],
     "win": {
       "target": "nsis",

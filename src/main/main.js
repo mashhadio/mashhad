@@ -8,6 +8,7 @@ const { pathToFileURL } = require('url');
 
 const { startCursorTracking, stopCursorTracking, resetCursorTracking } = require('./cursor-tracker');
 const { exportVideo, exportCleanAudio, probeHasAudio, killAllFfmpeg } = require('./ffmpeg-export');
+const { initAutoUpdate, installUpdate } = require('./updater');
 
 // ---------------------------------------------------------------------------
 // Paths / state
@@ -1388,6 +1389,9 @@ ipcMain.handle('settings:set', async (_evt, patch) => {
 // ---------------------------------------------------------------------------
 // App lifecycle
 // ---------------------------------------------------------------------------
+// Renderer's "restart to update" button — quit and install the downloaded update.
+ipcMain.handle('update:restart', () => { installUpdate(); return { ok: true }; });
+
 app.whenReady().then(() => {
   // Auto-grant only the specific media permissions our own renderer pages need,
   // and only when the request actually comes from one of our own pages — not a
@@ -1403,6 +1407,9 @@ app.whenReady().then(() => {
   createWindow();
   // Deferred + async so cleanup never delays the window appearing.
   cleanupStaleFiles().catch(() => {});
+  // Check for a new version (packaged Win/AppImage only; no-op elsewhere). Pushes
+  // status to the renderer's update banner; the restart is user-triggered below.
+  initAutoUpdate(() => mainWindow);
 
   globalShortcut.register(RECORD_SHORTCUT, () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
