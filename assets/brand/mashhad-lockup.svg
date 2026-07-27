@@ -1,0 +1,9 @@
+<svg width="880" height="300" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mashhad logo lockup">
+  <rect x="40" y="58" width="200" height="184" rx="36" fill="#E7ECF1" stroke="#1A2530" stroke-width="9"/>
+  <path d="M96 100 L96 200 L166 150 Z" fill="#2C3E50" stroke="#1A2530" stroke-width="5" stroke-linejoin="round"/>
+  <circle cx="214" cy="86" r="11" fill="#E23B2E"/>
+  <line x1="300" y1="72" x2="300" y2="228" stroke="#D6DEE6" stroke-width="3"/>
+  <text x="338" y="150" font-family="Georgia, 'Times New Roman', serif" font-size="84" letter-spacing="2" fill="#1A2530">Mashhad</text>
+  <text x="340" y="186" font-family="'Segoe UI', Tahoma, sans-serif" font-size="14" letter-spacing="7" fill="#556575">SCREEN&#160;&#160;RECORDING&#160;&#160;STUDIO</text>
+  <text x="822" y="150" text-anchor="end" font-family="'Segoe UI', Tahoma, sans-serif" font-size="46" fill="#2C3E50">مشهد</text>
+</svg>

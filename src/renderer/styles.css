@@ -31,24 +31,25 @@
 }
 
 :root {
-  /* Brand */
-  --accent: #10b981;        /* emerald — primary */
-  --accent-2: #0ea371;      /* primary hover */
+  /* Brand — Gunmetal palette (#2C3E50) */
+  --accent: #5E86AE;        /* steel-blue — primary (brand slate, lifted for dark UI) */
+  --accent-2: #7098BE;      /* primary hover */
   --cyan: #22d3ee;          /* accent — zoom events */
   --violet: #8b5cf6;        /* creative — cursor tracking */
   --click: #f59e0b;         /* mouse click events */
-  --danger: #ef4444;        /* recording indicator */
-  --ok: #10b981;            /* audio / success */
+  --danger: #E23B2E;        /* recording indicator — brand record red */
+  --ok: #4FB58C;            /* audio / success */
 
-  /* Surfaces */
-  --bg: #090b10;
-  --panel: #161a23;         /* surface */
-  --panel-2: #1d2430;       /* surface hover */
-  --border: #2a3242;
+  /* Surfaces — gunmetal dark */
+  --bg: #0F151C;
+  --panel: #1A2530;         /* surface — brand ink */
+  --panel-2: #26333F;       /* surface hover */
+  --border: #33414F;
 
   /* Text */
-  --text: #f8fafc;
-  --muted: #94a3b8;
+  --text: #ECF1F6;
+  --muted: #97A6B6;
+  --hover: rgba(255,255,255,0.06);   /* subtle control hover — theme-aware */
 
   /* Radius */
   --r-sm: 8px;
@@ -66,6 +67,29 @@
   --normal: 250ms;
   --smooth: 400ms;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Light (day) theme — overrides the dark defaults above via <html data-theme="light">. */
+:root[data-theme="light"] {
+  --accent: #2C3E50;        /* darker slate for contrast on light */
+  --accent-2: #3A5069;
+  --cyan: #0E8E9B;
+  --violet: #6E5AC8;
+  --click: #C77E12;
+  --ok: #2F9E75;
+  --danger: #E23B2E;
+
+  --bg: #F5F7F9;
+  --panel: #FFFFFF;
+  --panel-2: #EDF1F5;
+  --border: #D6DEE6;
+
+  --text: #1A2530;
+  --muted: #556575;
+  --hover: rgba(26,37,48,0.06);
+
+  --shadow-card: 0 8px 30px rgba(26,37,48,0.10);
+  --shadow-float: 0 16px 50px rgba(26,37,48,0.16);
 }
 
 * { box-sizing: border-box; }
@@ -110,12 +134,12 @@ button:focus-visible, select:focus-visible, input:focus-visible, [tabindex]:focu
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 
-.btn-primary { background: var(--accent); color: #04150e; }
+.btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover { background: var(--accent-2); }
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover { background: #dc2f2f; }
 .btn-ghost { background: transparent; border: 1px solid var(--border); }
-.btn-ghost:hover { background: rgba(255,255,255,0.06); }
+.btn-ghost:hover { background: var(--hover); }
 
 .app {
   display: flex;
@@ -138,7 +162,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, [tabindex]:focu
   letter-spacing: normal;
 }
 .topbar .spacer { flex: 1; }
-.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px rgba(16,185,129,0.7); }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px rgba(94,134,174,0.7); }
 
 .content { flex: 1; overflow: auto; padding: 22px; }
 
@@ -149,7 +173,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, [tabindex]:focu
 .sources-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .tabs { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md); padding: 3px; }
 .tab { background: transparent; padding: 6px 14px; border-radius: var(--r-sm); font-size: 13px; }
-.tab.selected { background: var(--accent); color: #04150e; }
+.tab.selected { background: var(--accent); color: #fff; }
 .tab:hover:not(.selected) { background: var(--panel-2); }
 
 .source-hint {
@@ -264,8 +288,8 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent);
   display: none;
   align-items: center;
   gap: 14px;
-  background: linear-gradient(90deg, rgba(239,68,68,0.16), transparent);
-  border: 1px solid rgba(239,68,68,0.45);
+  background: linear-gradient(90deg, rgba(226,59,46,0.16), transparent);
+  border: 1px solid rgba(226,59,46,0.45);
   border-radius: var(--r-lg);
   padding: 14px 18px;
   margin-bottom: 18px;
@@ -279,8 +303,8 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent);
 /* Live recording indicator — a compact pill pinned in the topbar. */
 .recording-banner {
   display: none; align-items: center; gap: 10px;
-  background: rgba(239,68,68,0.14);
-  border: 1px solid rgba(239,68,68,0.4);
+  background: rgba(226,59,46,0.14);
+  border: 1px solid rgba(226,59,46,0.4);
   border-radius: var(--r-md); padding-block: 5px; padding-inline: 12px 6px;
 }
 .recording-banner.active { display: inline-flex; }
@@ -414,7 +438,7 @@ kbd {
 }
 .timeline .clip.selected {
   border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent), 0 2px 12px rgba(16,185,129,0.45);
+  box-shadow: inset 0 0 0 1px var(--accent), 0 2px 12px rgba(94,134,174,0.45);
 }
 .timeline .clip.dragging {
   z-index: 6; cursor: grabbing; opacity: 0.9;
@@ -455,7 +479,7 @@ kbd {
   position: absolute; top: 0; bottom: 0; width: 3px; z-index: 6;
   background: var(--accent); border-radius: 2px; pointer-events: none;
   display: none; transform: translateX(-1px);
-  box-shadow: 0 0 8px rgba(16,185,129,0.9);
+  box-shadow: 0 0 8px rgba(94,134,174,0.9);
 }
 .timeline .click-tick {
   position: absolute; bottom: 2px; width: 2px; height: 8px; background: var(--click); opacity: 0.85;
@@ -468,7 +492,7 @@ kbd {
 .timeline .clip.import.src-b { background: linear-gradient(180deg, rgba(139,92,246,0.20), rgba(139,92,246,0.07)); border-color: rgba(139,92,246,0.42); }
 .timeline .clip.import.src-c { background: linear-gradient(180deg, rgba(244,180,60,0.20), rgba(244,180,60,0.07)); border-color: rgba(244,180,60,0.42); }
 .timeline .clip.import.src-d { background: linear-gradient(180deg, rgba(236,72,153,0.20), rgba(236,72,153,0.07)); border-color: rgba(236,72,153,0.42); }
-.timeline .clip.import.src-e { background: linear-gradient(180deg, rgba(16,185,129,0.20), rgba(16,185,129,0.07)); border-color: rgba(16,185,129,0.42); }
+.timeline .clip.import.src-e { background: linear-gradient(180deg, rgba(94,134,174,0.20), rgba(94,134,174,0.07)); border-color: rgba(94,134,174,0.42); }
 .timeline .clip.import.src-f { background: linear-gradient(180deg, rgba(96,165,250,0.20), rgba(96,165,250,0.07)); border-color: rgba(96,165,250,0.42); }
 
 /* Camera background picker (swatch row). */
@@ -482,7 +506,7 @@ kbd {
   transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
 .bg-swatch:hover { border-color: var(--muted); }
-.bg-swatch.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(16,185,129,0.4); }
+.bg-swatch.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(94,134,174,0.4); }
 /* Segmentation unavailable: only "none" works; dim/disable the replace swatches. */
 .bg-picker.no-seg .bg-swatch:not([data-bg="none"]) { opacity: 0.35; pointer-events: none; }
 
@@ -550,7 +574,7 @@ kbd {
   cursor: grab; overflow: hidden;
   transition: box-shadow var(--fast) var(--ease), border-color var(--fast) var(--ease);
 }
-.oclip.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), 0 2px 12px rgba(16,185,129,0.45); }
+.oclip.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), 0 2px 12px rgba(94,134,174,0.45); }
 .oclip.dragging { z-index: 30; cursor: grabbing; opacity: 0.9; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
 .oclip .clip-label { font-size: 11px; color: #ddd6fe; pointer-events: none; font-variant-numeric: tabular-nums; user-select: none; }
 .oclip .clip-delete {
@@ -563,7 +587,7 @@ kbd {
 
 /* ---- Audio tracks (voice-over / audio clips), rendered below the main track ---- */
 .tl-audio { display: flex; flex-direction: column; gap: 5px; }
-#voBtn.recording { background: #ef4444; color: #fff; border-color: #ef4444; }
+#voBtn.recording { background: #E23B2E; color: #fff; border-color: #E23B2E; }
 /* Audio clip: amber-tinted with a waveform-ish feel. */
 .aclip {
   position: absolute; top: 2px; bottom: 2px; z-index: 1; box-sizing: border-box;
@@ -573,7 +597,7 @@ kbd {
   cursor: grab; overflow: hidden;
   transition: box-shadow var(--fast) var(--ease), border-color var(--fast) var(--ease);
 }
-.aclip.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), 0 2px 12px rgba(16,185,129,0.45); }
+.aclip.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), 0 2px 12px rgba(94,134,174,0.45); }
 .aclip.dragging { z-index: 30; cursor: grabbing; opacity: 0.9; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
 .aclip .clip-label { font-size: 11px; color: #fde68a; pointer-events: none; font-variant-numeric: tabular-nums; user-select: none; }
 .aclip .clip-delete {

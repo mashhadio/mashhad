@@ -15,6 +15,7 @@
     "publish": "node scripts/publish-release.js",
     "publish:win": "node scripts/publish-release.js",
     "icons": "node scripts/make-icons.js",
+    "brand": "node scripts/make-brand.js",
     "logo": "node scripts/make-logo.js"
   },
   "devDependencies": {

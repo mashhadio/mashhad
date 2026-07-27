@@ -1,0 +1,5 @@
+<svg width="400" height="360" viewBox="0 0 400 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mashhad mark">
+  <rect x="48" y="44" width="304" height="272" rx="52" fill="#E7ECF1" stroke="#1A2530" stroke-width="12"/>
+  <path d="M170 122 L170 238 L256 180 Z" fill="#2C3E50" stroke="#1A2530" stroke-width="7" stroke-linejoin="round"/>
+  <circle cx="294" cy="102" r="15" fill="#E23B2E"/>
+</svg>

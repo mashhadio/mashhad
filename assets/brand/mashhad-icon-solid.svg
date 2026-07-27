@@ -1,0 +1,6 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mashhad app icon solid">
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="#FFFFFF" stroke="#D6DEE6" stroke-width="2"/>
+  <rect x="104" y="120" width="304" height="272" rx="52" fill="#1A2530"/>
+  <path d="M226 206 L226 306 L308 256 Z" fill="#A9B6C4"/>
+  <circle cx="352" cy="176" r="16" fill="#E23B2E"/>
+</svg>
