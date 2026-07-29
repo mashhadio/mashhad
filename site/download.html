@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>تنزيل «مشهد»، كل الأنظمة</title>
+<meta name="description" content="حمّل «مشهد» لويندوز أو ماك أو لينكس. مثبّت ‎.exe، وHomebrew أو ‎.dmg لماك، وAppImage أو ‎.deb للينكس.">
+<link rel="icon" type="image/svg+xml" href="../assets/brand/mashhad-favicon.svg">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<div class="site">
+
+  <header class="nav">
+    <div class="wrap nav-in">
+      <a class="brand" href="index.html">
+        <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="16" y="16" width="480" height="480" rx="112" fill="#FFFFFF" stroke="#D6DEE6" stroke-width="2"/><rect x="104" y="120" width="304" height="272" rx="52" fill="#E7ECF1" stroke="#1A2530" stroke-width="12"/><path d="M226 198 L226 314 L312 256 Z" fill="#2C3E50" stroke="#1A2530" stroke-width="10" stroke-linejoin="round"/><circle cx="350" cy="178" r="15" fill="#E23B2E"/></svg>
+        <span>مشهد</span>
+      </a>
+      <nav class="nav-links">
+        <a href="index.html#features">المميّزات</a>
+        <a href="index.html#shots">لقطات</a>
+        <a href="download.html">التنزيل</a>
+      </nav>
+      <a class="btn btn-gold" href="index.html">الرئيسيّة</a>
+    </div>
+  </header>
+
+  <main class="wrap">
+
+    <div class="warn-box">
+      <span class="tb-ic" aria-hidden="true">⚠️</span>
+      <span><b>تنبيه:</b> نرجو أن تستخدم «مشهد» فيما يُرضي الله سبحانه وتعالى، ونحن نتبرّأ إلى الله من كلّ استخدامٍ فيه معصية أو ما يُغضبه.</span>
+    </div>
+
+    <section class="dl-hero">
+      <a class="back" href="index.html"><span aria-hidden="true">→</span> العودة للرئيسيّة</a>
+      <h1>حمّل «مشهد» لنظامك</h1>
+      <p>اختر نظام التشغيل المناسب، النسخة الموصى بها لجهازك مميّزة تلقائيًّا. مجّاني، بدون حساب، وبتحديث تلقائيّ.</p>
+    </section>
+
+    <section style="padding-top:24px">
+      <div class="dl-grid">
+
+        <div class="dl" data-os="win" id="dl-win">
+          <div class="os"><span class="glyph">🪟</span><b>ويندوز</b><span class="yours">نظامك</span></div>
+          <div class="meta">مثبّت <code>.exe</code> لويندوز 10/11 (64‑بت). قد يظهر تنبيه SmartScreen لأنّ النسخة غير موقّعة، اختر «مزيد من المعلومات» ثم «تشغيل».</div>
+          <span class="fname" id="win-name">…</span>
+          <a class="btn btn-gold" id="win-dl" href="#">تنزيل لويندوز</a>
+          <span class="sub">تحديث تلقائيّ داخل التطبيق</span>
+        </div>
+
+        <div class="dl" data-os="mac" id="dl-mac">
+          <div class="os"><span class="glyph">🍎</span><b>ماك</b><span class="yours">نظامك</span></div>
+          <div class="meta">ثبّته بإحدى طريقتين، عبر Homebrew (موصى به، يتضمّن التحديث) أو بتنزيل ملف <code>.dmg</code> مباشرة.</div>
+          <div class="brew">
+            <code id="mac-brew">brew install --cask abdu.medhat94/mashhad/mashhad</code>
+            <button type="button" class="copy" id="mac-brew-copy">نسخ</button>
+          </div>
+          <span class="fname" id="mac-name">…</span>
+          <a class="btn btn-ghost" id="mac-dl" href="#" style="justify-content:center">تنزيل ملف ‎.dmg مباشرة</a>
+          <span class="sub">للتحديث عبر brew: <code id="mac-upgrade">brew upgrade --cask mashhad</code></span>
+        </div>
+
+        <div class="dl" data-os="linux" id="dl-linux">
+          <div class="os"><span class="glyph">🐧</span><b>لينكس</b><span class="yours">نظامك</span></div>
+          <div class="meta">صيغة <code>AppImage</code> (تحديث تلقائيّ) أو حزمة <code>.deb</code>. فعّل التشغيل ثمّ شغّل الملف.</div>
+          <span class="fname" id="linux-name">…</span>
+          <a class="btn btn-gold" id="linux-dl" href="#">تنزيل AppImage</a>
+          <a class="btn btn-ghost" id="deb-dl" href="#" style="justify-content:center">تنزيل ‎.deb</a>
+        </div>
+
+      </div>
+      <p class="note-real">الإصدار الحاليّ: <b id="verLabel">v0.1.0</b>، تُشير الروابط إلى قناة الإصدارات العامّة على GitLab. تأكّد من مطابقة اسم الملف والإصدار عند أوّل نشر.</p>
+    </section>
+
+  </main>
+
+  <footer class="ft">
+    <div class="wrap ft-support">
+      هل تحتاج أيّ مساعدة؟ راسِلنا على <a href="mailto:support@mashhad.io">support@mashhad.io</a>
+    </div>
+    <div class="wrap ft-in">
+      <a class="brand" href="index.html" style="font-size:17px"><svg viewBox="0 0 512 512" width="30" height="30" aria-hidden="true"><rect x="16" y="16" width="480" height="480" rx="112" fill="#FFFFFF" stroke="#D6DEE6" stroke-width="2"/><rect x="104" y="120" width="304" height="272" rx="52" fill="#E7ECF1" stroke="#1A2530" stroke-width="12"/><path d="M226 198 L226 314 L312 256 Z" fill="#2C3E50" stroke="#1A2530" stroke-width="10" stroke-linejoin="round"/><circle cx="350" cy="178" r="15" fill="#E23B2E"/></svg> مشهد</a>
+      <span class="grow"></span>
+      <a href="index.html#features">المميّزات</a>
+      <span>© <span id="yr">2026</span> مشهد، مسجّل شاشة بتكبير سلس.</span>
+    </div>
+  </footer>
+
+</div>
+
+<script src="release.js"></script>
+<script>
+(function(){
+  var F = MASHHAD.FILES, L = MASHHAD.LABELS;
+
+  function set(id, attr, val){ var el=document.getElementById(id); if(el){ if(attr==="text") el.textContent=val; else el.setAttribute(attr,val); } }
+
+  set("win-dl","href",F.win.url);   set("win-name","text",F.win.name);
+  set("mac-dl","href",F.mac.url);   set("mac-name","text",F.mac.name);
+  set("linux-dl","href",F.linux.url); set("linux-name","text",F.linux.name);
+  set("deb-dl","href",F.deb.url);
+  set("mac-brew","text",MASHHAD.BREW);
+  set("mac-upgrade","text",MASHHAD.BREW_UPGRADE);
+  set("verLabel","text","v"+MASHHAD.VERSION);
+
+  var yr=document.getElementById("yr"); if(yr){ yr.textContent=String(new Date().getFullYear()); }
+
+  // highlight the visitor's OS
+  var os = MASHHAD.detectOS();
+  var card = document.getElementById("dl-" + os);
+  if(card){ card.classList.add("match"); }
+
+  // copy brew command
+  var copyBtn = document.getElementById("mac-brew-copy");
+  if(copyBtn){
+    copyBtn.addEventListener("click", function(){
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(MASHHAD.BREW).then(function(){
+          var old = copyBtn.textContent; copyBtn.textContent = "✓ نُسخ";
+          setTimeout(function(){ copyBtn.textContent = old; }, 1600);
+        });
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>
