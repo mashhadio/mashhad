@@ -1,4 +1,4 @@
-# Smooth Screen Recorder
+# مشهد (Mashhad)
 
 A cross-platform desktop app (Electron, runs on **macOS**, **Windows** and **Linux**) for
 recording your screen with **smooth, automatic zoom-in that follows your cursor**
@@ -93,7 +93,7 @@ app — macOS only applies them to a fresh launch. If zoom never follows your cu
 Accessibility/Input Monitoring is almost always the missing piece.
 
 > In development (`npm start`) the running binary is Electron, so the entry to enable is
-> named **Electron**, not "Smooth Screen Recorder".
+> named **Electron**, not "مشهد".
 
 ### Windows / Linux
 
@@ -118,14 +118,17 @@ session (cursor tracking may not work under Wayland).
 
 ## Where files go
 
-Recordings and exports are saved under a **SmoothScreenRecorder** folder in your Videos
-location:
+Recordings and exports are saved under a **Mashhad** folder in your Videos location:
 
 | OS | Path |
 |---|---|
-| macOS | `~/Movies/SmoothScreenRecorder` |
-| Windows | `%USERPROFILE%\Videos\SmoothScreenRecorder` |
-| Linux | `~/Videos/SmoothScreenRecorder` |
+| macOS | `~/Movies/Mashhad` |
+| Windows | `%USERPROFILE%\Videos\Mashhad` |
+| Linux | `~/Videos/Mashhad` |
+
+Builds released under the old **SmoothScreenRecorder** name used a folder of that name;
+the app renames it on first launch, so earlier recordings carry over. If a `Mashhad`
+folder already exists, the old one is left untouched rather than merged.
 
 Each capture produces an intermediate `.webm` (the raw screen + mic), a `.cursor.json`
 sidecar (cursor path + clicks + display info), and — if the webcam was on — a `.cam.webm`.

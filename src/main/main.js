@@ -13,7 +13,10 @@ const { initAutoUpdate, installUpdate, openDownload, copyBrewCommand } = require
 // ---------------------------------------------------------------------------
 // Paths / state
 // ---------------------------------------------------------------------------
-const RECORDINGS_DIR = path.join(app.getPath('videos'), 'SmoothScreenRecorder');
+const RECORDINGS_DIR = path.join(app.getPath('videos'), 'Mashhad');
+// The app shipped as "Smooth Screen Recorder" before the rename; recordings made by
+// those builds are still in the old folder. See migrateLegacyRecordings().
+const LEGACY_RECORDINGS_DIR = path.join(app.getPath('videos'), 'SmoothScreenRecorder');
 // Saved project files (.ssproj) and their persistent assets (voice-overs) live
 // here so a project can be reopened long after the session that created it.
 const PROJECTS_DIR = path.join(RECORDINGS_DIR, 'Projects');
@@ -33,6 +36,21 @@ function isPathInside(candidate, dir) {
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+// One-time move of the pre-rename recordings folder, so past recordings (and their
+// projects) still show up after updating. Deliberately conservative: it only renames
+// when the new folder doesn't exist yet, so it can never merge two folders or
+// overwrite anything. Failure is non-fatal — the app just starts empty.
+function migrateLegacyRecordings() {
+  try {
+    if (!fs.existsSync(LEGACY_RECORDINGS_DIR)) return;
+    if (fs.existsSync(RECORDINGS_DIR)) return;
+    fs.renameSync(LEGACY_RECORDINGS_DIR, RECORDINGS_DIR);
+    console.log('[migrate] recordings folder renamed to Mashhad');
+  } catch (err) {
+    console.warn('[migrate] could not rename the old recordings folder:', err && err.message);
+  }
 }
 
 const isMac = process.platform === 'darwin';
@@ -1406,6 +1424,7 @@ app.whenReady().then(() => {
     callback(allowedPermission && fromOwnRenderer);
   });
 
+  migrateLegacyRecordings(); // before anything reads RECORDINGS_DIR
   requestMacMediaAccess();
   createWindow();
   // Deferred + async so cleanup never delays the window appearing.
