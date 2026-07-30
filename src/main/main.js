@@ -17,11 +17,15 @@ const RECORDINGS_DIR = path.join(app.getPath('videos'), 'Mashhad');
 // The app shipped as "Smooth Screen Recorder" before the rename; recordings made by
 // those builds are still in the old folder. See migrateLegacyRecordings().
 const LEGACY_RECORDINGS_DIR = path.join(app.getPath('videos'), 'SmoothScreenRecorder');
-// Saved project files (.ssproj) and their persistent assets (voice-overs) live
+// Saved project files (.mashhad) and their persistent assets (voice-overs) live
 // here so a project can be reopened long after the session that created it.
 const PROJECTS_DIR = path.join(RECORDINGS_DIR, 'Projects');
 const PROJECT_ASSETS_DIR = path.join(PROJECTS_DIR, 'assets');
-const PROJECT_EXT = 'ssproj';
+const PROJECT_EXT = 'mashhad';
+// Projects saved before the rename used .ssproj ("smooth screen project") and carry
+// that string as their `format`. We still open them — only new saves use .mashhad.
+const LEGACY_PROJECT_EXT = 'ssproj';
+const PROJECT_EXTS = [PROJECT_EXT, LEGACY_PROJECT_EXT];
 
 // Origin of our own renderer pages (index.html, editor.html, ...), used to scope
 // the permission handler and the navigation guard below to content we actually
@@ -126,10 +130,10 @@ if (!app.requestSingleInstanceLock()) {
 
 // The project currently loaded in the editor.
 let currentProject = null; // { videoPath, cursorPath, hasAudio, display, recBaseEpoch }
-// Absolute path of the .ssproj file backing the current session, once the user
+// Absolute path of the .mashhad file backing the current session, once the user
 // has saved (or opened) one — lets Save and auto-save write without re-prompting.
 let currentProjectFile = null;
-// Edit-state parsed from an opened .ssproj, handed to the editor once it loads.
+// Edit-state parsed from an opened .mashhad, handed to the editor once it loads.
 let pendingProject = null; // { edit, sources } | null
 
 // Timeline media sources keyed by id. The editor's clips reference these by id;
@@ -922,7 +926,7 @@ function pathToFileUrl(p) {
 }
 
 // ---------------------------------------------------------------------------
-// IPC: project save / open (.ssproj). A project file is a JSON snapshot of the
+// IPC: project save / open (.mashhad). A project file is a JSON snapshot of the
 // editor's edit-state plus references (absolute paths) to every media file it
 // uses, so the whole timeline can be rebuilt later. Media (recording, imports,
 // voice-overs) is referenced in place — not copied — since those live in
@@ -975,7 +979,7 @@ async function cleanupStaleFiles() {
       const referenced = new Set();
       const projects = await fsp.readdir(PROJECTS_DIR).catch(() => []);
       for (const f of projects) {
-        if (!f.endsWith(`.${PROJECT_EXT}`)) continue;
+        if (!PROJECT_EXTS.some((ext) => f.endsWith(`.${ext}`))) continue;
         try {
           const data = JSON.parse(await fsp.readFile(path.join(PROJECTS_DIR, f), 'utf8'));
           for (const s of data.sources || []) if (s.path) referenced.add(path.resolve(s.path));
@@ -1053,7 +1057,7 @@ ipcMain.handle('project:autosave', async (_evt, { edit, sources }) => {
   }
 });
 
-// Open a .ssproj: parse it, rebuild currentProject + mediaSources, stash the
+// Open a project file: parse it, rebuild currentProject + mediaSources, stash the
 // edit-state for the editor to apply on load, then swap to the editor.
 ipcMain.handle('project:open', async () => {
   ensureDir(PROJECTS_DIR);
@@ -1061,7 +1065,7 @@ ipcMain.handle('project:open', async () => {
     title: 'فتح مشروع',
     defaultPath: PROJECTS_DIR,
     properties: ['openFile'],
-    filters: [{ name: 'مشروع مشهد', extensions: [PROJECT_EXT] }],
+    filters: [{ name: 'مشروع مشهد', extensions: PROJECT_EXTS }],
   });
   if (canceled || !filePaths.length) return { canceled: true };
   return loadProjectFile(filePaths[0]);
@@ -1074,7 +1078,7 @@ function loadProjectFile(file) {
   } catch (_) {
     return { error: 'تعذّر قراءة ملف المشروع' };
   }
-  if (!data || data.format !== PROJECT_EXT) return { error: 'ملف مشروع غير صالح' };
+  if (!data || !PROJECT_EXTS.includes(data.format)) return { error: 'ملف مشروع غير صالح' };
 
   // Rebuild the recording reference (studio-only projects have none).
   const missing = [];

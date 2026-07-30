@@ -1,10 +1,10 @@
 'use strict';
 
 // editor-project.js — part of the editor.js module split (see editor.html for load order).
-// Project files (.ssproj): serialize/save/autosave/restore edit-state, and the undo/redo history stack.
+// Project files (.mashhad): serialize/save/autosave/restore edit-state, and the undo/redo history stack.
 
 // ---------------------------------------------------------------------------
-// Project files (.ssproj). A project bundles the full edit-state (everything in
+// Project files (.mashhad). A project bundles the full edit-state (everything in
 // snapshotState() plus zoom blocks, scene data, settings and id counters) with a
 // manifest of the media sources, so a whole timeline can be rebuilt later. The
 // media files themselves are referenced in place by the main process.

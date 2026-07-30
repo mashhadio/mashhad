@@ -150,7 +150,7 @@ const audioEls = new Map(); // clipId -> <audio>
 let voState = null; // active voice-over recording: { recorder, chunks, startPos, stream, startTime }
 let voArming = false; // true between the VO click and the mic stream resolving
 
-// Name of the .ssproj backing this session (set after a manual save or when the
+// Name of the .mashhad backing this session (set after a manual save or when the
 // editor was opened from a project). While set, edits are auto-saved to it.
 let projectFileName = null;
 

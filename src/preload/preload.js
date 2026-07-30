@@ -51,7 +51,7 @@ contextBridge.exposeInMainWorld('api', {
   getProject: () => ipcRenderer.invoke('project:get'),
   previewAudio: (opts) => ipcRenderer.invoke('audio:preview', opts),
 
-  // project files (.ssproj): save / auto-save / open / restore edit-state
+  // project files (.mashhad): save / auto-save / open / restore edit-state
   saveProject: (payload) => ipcRenderer.invoke('project:save', payload),
   autoSaveProject: (payload) => ipcRenderer.invoke('project:autosave', payload),
   openProject: () => ipcRenderer.invoke('project:open'),

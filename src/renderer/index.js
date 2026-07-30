@@ -1494,7 +1494,7 @@ if (openStudioBtn) {
   });
 }
 
-// Open a saved .ssproj project — the main process swaps to the editor and
+// Open a saved .mashhad project — the main process swaps to the editor and
 // restores the timeline. Reports missing media if any referenced file moved.
 const openProjectBtn = document.getElementById('openProjectBtn');
 if (openProjectBtn) {
