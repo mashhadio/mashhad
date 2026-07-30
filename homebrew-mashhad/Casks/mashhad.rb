@@ -1,19 +1,24 @@
 cask "mashhad" do
-  version "0.1.0"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  # Apple Silicon and Intel get separate builds — `arch` picks the right one and
+  # substitutes into the url below as #{arch}.
+  arch arm: "arm64", intel: "x64"
 
-  # The .dmg is served from the public mashhad-releases generic Package Registry,
-  # version-pinned so Homebrew can verify the sha256. Built on a Mac and uploaded
-  # via `npm run publish` (see the releases project).
-  url "https://gitlab.com/api/v4/projects/abdu.medhat94%2Fmashhad-releases/packages/generic/mashhad/#{version}/Mashhad-#{version}-arm64.dmg"
+  version "1.0.0"
+
+  # Fill both from the built .dmg files before pushing a release:
+  #   shasum -a 256 dist/Mashhad-<version>-arm64.dmg dist/Mashhad-<version>-x64.dmg
+  sha256 arm:   "0000000000000000000000000000000000000000000000000000000000000000",
+         intel: "0000000000000000000000000000000000000000000000000000000000000000"
+
+  # Attached to the tagged release in the public mashhad-releases repo, so Homebrew can
+  # verify the sha256 against a URL that never changes under it.
+  url "https://github.com/mashhadio/mashhad-releases/releases/download/v#{version}/Mashhad-#{version}-#{arch}.dmg"
   name "مشهد"
   name "Mashhad"
   desc "Screen recorder with cursor-tracking smooth zoom and mic noise cleanup"
-  homepage "https://gitlab.com/abdu.medhat94/smooth-screen-record"
+  homepage "https://mashhad.io"
 
-  # If you also ship an Intel build, replace the single url/sha256 above with:
-  #   on_arm  do; sha256 "..."; url ".../Mashhad-#{version}-arm64.dmg"; end
-  #   on_intel do; sha256 "..."; url ".../Mashhad-#{version}-x64.dmg";  end
+  depends_on macos: ">= :catalina"
 
   app "مشهد.app"
 

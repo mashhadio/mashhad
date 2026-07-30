@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>مشهد، مسجّل الشاشة بتكبير سلس</title>
 <meta name="description" content="مشهد: مسجّل شاشة عربيّ مع تكبير سلس يتتبّع المؤشر، تنقية لضوضاء الميكروفون، كاميرا بخلفية قابلة للتمويه، ومحرّر استوديو. لويندوز وماك ولينكس.">
-<link rel="icon" type="image/svg+xml" href="../assets/brand/mashhad-favicon.svg">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
@@ -55,8 +55,8 @@
         <div class="brewbox" id="heroBrew" hidden>
           <span class="brew-lb">أو ثبّته وحدّثه عبر Homebrew:</span>
           <div class="brew">
-            <code id="brewCmd">brew install --cask abdu.medhat94/mashhad/mashhad</code>
-            <button type="button" class="copy" id="brewCopy" data-copy="brew install --cask abdu.medhat94/mashhad/mashhad">نسخ</button>
+            <code id="brewCmd" style="white-space:pre-line">…</code>
+            <button type="button" class="copy" id="brewCopy">نسخ</button>
           </div>
         </div>
 
@@ -256,6 +256,8 @@
   if(os === "mac"){
     var brew = document.getElementById("heroBrew");
     if(brew){ brew.hidden = false; }
+    var cmd = document.getElementById("brewCmd");
+    if(cmd){ cmd.textContent = MASHHAD.BREW; }
     var line = document.getElementById("bandOsLine");
     if(line){ line.textContent = "على ماك: نزّل ملف ‎.dmg مباشرة أو ثبّته عبر Homebrew، الطريقتان مدعومتان."; }
   }
@@ -264,9 +266,8 @@
   var copyBtn = document.getElementById("brewCopy");
   if(copyBtn){
     copyBtn.addEventListener("click", function(){
-      var txt = copyBtn.getAttribute("data-copy");
       if(navigator.clipboard && navigator.clipboard.writeText){
-        navigator.clipboard.writeText(txt).then(function(){
+        navigator.clipboard.writeText(MASHHAD.BREW).then(function(){
           var old = copyBtn.textContent; copyBtn.textContent = "✓ نُسخ";
           setTimeout(function(){ copyBtn.textContent = old; }, 1600);
         });

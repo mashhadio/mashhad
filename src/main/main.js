@@ -8,7 +8,7 @@ const { pathToFileURL } = require('url');
 
 const { startCursorTracking, stopCursorTracking, resetCursorTracking } = require('./cursor-tracker');
 const { exportVideo, exportCleanAudio, probeHasAudio, killAllFfmpeg } = require('./ffmpeg-export');
-const { initAutoUpdate, installUpdate } = require('./updater');
+const { initAutoUpdate, installUpdate, openDownload, copyBrewCommand } = require('./updater');
 
 // ---------------------------------------------------------------------------
 // Paths / state
@@ -1391,6 +1391,9 @@ ipcMain.handle('settings:set', async (_evt, patch) => {
 // ---------------------------------------------------------------------------
 // Renderer's "restart to update" button — quit and install the downloaded update.
 ipcMain.handle('update:restart', () => { installUpdate(); return { ok: true }; });
+// macOS banner (notify-only): open the .dmg in the browser, or copy the brew command.
+ipcMain.handle('update:download', () => { openDownload(); return { ok: true }; });
+ipcMain.handle('update:copyBrew', () => { copyBrewCommand(); return { ok: true }; });
 
 app.whenReady().then(() => {
   // Auto-grant only the specific media permissions our own renderer pages need,

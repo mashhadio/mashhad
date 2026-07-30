@@ -1,0 +1,6 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mashhad favicon">
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#FFFFFF" stroke="#D6DEE6" stroke-width="1"/>
+  <rect x="11" y="14" width="42" height="36" rx="11" fill="#1A2530"/>
+  <path d="M27 24 L27 40 L42 32 Z" fill="#A9B6C4"/>
+  <circle cx="46" cy="20" r="6.5" fill="#E23B2E"/>
+</svg>

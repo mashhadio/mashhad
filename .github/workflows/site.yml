@@ -1,0 +1,48 @@
+name: Site
+
+# Publishes site/ to the PUBLIC mashhadio/mashhad-releases repo, on its `gh-pages`
+# branch, which GitHub Pages then serves at the custom domain in site/CNAME.
+#
+# Why not deploy Pages from this repo directly: GitHub Pages is only available for
+# private repositories on Pro/Team/Enterprise plans. Pushing the built site to a public
+# repo works on every plan and keeps this repo's source closed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/site.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never let two deploys race; the newest push wins.
+concurrency:
+  group: site
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Push site/ to the public releases repo
+        env:
+          # Same PAT the release workflow uses — needs contents:write on mashhad-releases.
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd site
+          git init -q
+          git config user.name "mashhad-site"
+          git config user.email "noreply@mashhad.io"
+          git add -A
+          git commit -qm "site: ${GITHUB_SHA:0:7}"
+          # gh-pages is a pure mirror of site/ with no history worth keeping, so the
+          # force-push is deliberate — it never touches the releases repo's main branch.
+          git push -q --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/mashhadio/mashhad-releases.git" \
+            HEAD:gh-pages

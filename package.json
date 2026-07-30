@@ -1,7 +1,7 @@
 {
   "name": "mashhad",
   "productName": "مشهد",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "مشهد — مسجّل شاشة مع تكبير سلس يتتبّع المؤشر وتنقية لضوضاء الميكروفون",
   "main": "src/main/main.js",
   "author": "Abdul",
@@ -11,9 +11,15 @@
     "dist": "electron-builder -p never",
     "dist:win": "electron-builder --win -p never",
     "dist:mac": "electron-builder --mac -p never",
+    "dist:mac:arm64": "node scripts/ffmpeg-arch.js arm64 && electron-builder --mac --arm64 -p never",
+    "dist:mac:x64": "node scripts/ffmpeg-arch.js x64 && electron-builder --mac --x64 -p never",
+    "dist:mac:all": "npm run dist:mac:arm64 && npm run dist:mac:x64",
     "dist:linux": "electron-builder --linux -p never",
-    "publish": "node scripts/publish-release.js",
-    "publish:win": "node scripts/publish-release.js",
+    "release:win": "electron-builder --win -p always",
+    "release:linux": "electron-builder --linux -p always",
+    "release:mac:arm64": "node scripts/ffmpeg-arch.js arm64 && electron-builder --mac --arm64 -p always",
+    "release:mac:x64": "node scripts/ffmpeg-arch.js x64 && electron-builder --mac --x64 -p always",
+    "release:mac": "npm run release:mac:arm64 && npm run release:mac:x64",
     "icons": "node scripts/make-icons.js",
     "brand": "node scripts/make-brand.js",
     "logo": "node scripts/make-logo.js"
@@ -49,8 +55,9 @@
     ],
     "publish": [
       {
-        "provider": "generic",
-        "url": "https://gitlab.com/api/v4/projects/abdu.medhat94%2Fmashhad-releases/packages/generic/mashhad/latest"
+        "provider": "github",
+        "owner": "mashhadio",
+        "repo": "mashhad-releases"
       }
     ],
     "win": {

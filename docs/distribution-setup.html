@@ -56,11 +56,18 @@
   <p class="lead">How new versions reach users, the one-time setup, and the per-release runbook.</p>
 
   <div class="note">
-    <p><strong>Model:</strong> the <em>source repo stays private</em>, but the <em>compiled installers +
-    update metadata are served from a public channel</em> so the app (and Homebrew) can fetch updates
-    with no credentials. Publishing binaries does not expose the private repo.
-    <span class="muted">(An Electron installer's <code>app.asar</code> is extractable by any user regardless —
-    this hides the repo, not the shipped JS.)</span></p>
+    <p><strong>Model:</strong> the <em>source repo is private</em> at
+    <code>github.com/mashhadio/mashhad</code>, while the <em>compiled installers + update metadata
+    live in a separate public repo</em> — <code>mashhadio/mashhad-releases</code> — as GitHub
+    release assets, so the app and Homebrew fetch updates with no credentials. The public download
+    site is served from that same public repo's <code>gh-pages</code> branch.
+    <span class="muted">(An Electron installer's <code>app.asar</code> is extractable by any user
+    regardless — a private repo hides the history and tooling, not the shipped JS.)</span></p>
+    <p><strong>Account:</strong> the <code>mashhadio</code> owner appears in exactly four places —
+    change all four together: <code>build.publish[0]</code> in <code>package.json</code>,
+    <code>OWNER</code> in <code>site/release.js</code>, the <code>url</code> line in
+    <code>homebrew-mashhad/Casks/mashhad.rb</code>, and the release repo referenced in
+    <code>.github/workflows/release.yml</code>.</p>
   </div>
 
   <h2>How updates reach each platform</h2>
@@ -72,66 +79,84 @@
         <td>Works only when run as a real AppImage (the <code>APPIMAGE</code> env var is set).</td></tr>
     <tr><td><strong>Linux</strong> <code>.deb</code></td><td>None (apt / manual)</td>
         <td>The in-app updater is disabled; update via your package manager or a new <code>.deb</code>.</td></tr>
-    <tr><td><strong>macOS</strong></td><td>Homebrew Cask</td>
-        <td><code>brew upgrade --cask mashhad</code>. No in-app updater (that needs Apple signing).</td></tr>
+    <tr><td><strong>macOS</strong></td><td>Notify-only banner + Homebrew Cask</td>
+        <td>The app reads the same feed and shows a banner with a <em>copy <code>brew upgrade</code></em>
+        button and a direct <code>.dmg</code> link. It can't self-install: Squirrel.Mac refuses unsigned
+        updates.</td></tr>
   </table>
-  <p>The in-app updater checks the feed on launch, downloads in the background, and shows an Arabic
-    banner with an <strong>«أعد التشغيل للتحديث»</strong> (Restart to update) button. It is a no-op in
-    development and on unsupported targets.</p>
+  <p>On Windows and AppImage the updater checks the feed on launch, downloads in the background, and shows
+    an Arabic banner with an <strong>«أعد التشغيل للتحديث»</strong> (Restart to update) button. On macOS the
+    same banner appears but offers <strong>«نسخ أمر التحديث»</strong> / <strong>«تنزيل النسخة الجديدة»</strong>
+    instead. It is a no-op in development and on unsupported targets.</p>
 
   <h2>The update feed</h2>
-  <p>The feed is a <strong>public GitLab generic Package Registry</strong> in a separate
-    <code>mashhad-releases</code> project, at a fixed <code>latest</code> slot. The app is pointed at it via
-    <code>build.publish</code> in <code>package.json</code>:</p>
-  <pre><code>https://gitlab.com/api/v4/projects/abdu.medhat94%2Fmashhad-releases/packages/generic/mashhad/latest</code></pre>
-  <p class="muted">electron-updater reads <code>…/latest/latest.yml</code> (or <code>latest-linux.yml</code>)
-    and pulls the installer listed beside it. Each publish also uploads a version-pinned copy
-    (<code>…/&lt;version&gt;/…</code>) that the Homebrew cask points at.</p>
+  <p>The feed is the <strong>GitHub releases</strong> of <code>mashhadio/mashhad-releases</code>. The app is
+    pointed at it via <code>build.publish</code> in <code>package.json</code>:</p>
+  <pre><code>{ "provider": "github", "owner": "mashhadio", "repo": "mashhad-releases" }</code></pre>
+  <p class="muted">electron-updater reads <code>latest.yml</code> (or <code>latest-linux.yml</code>) from the
+    newest published release and pulls the installer listed beside it. The macOS check in
+    <code>src/main/updater.js</code> reads <code>releases/latest/download/latest-mac.yml</code> — a plain
+    redirecting URL, not the API, so there's no rate limit to trip on launch. The Homebrew cask points at
+    the tag-pinned asset URL (<code>releases/download/v&lt;version&gt;/…</code>), which never moves under it.</p>
 
   <h2>One-time setup <span class="pill">do these first — nothing updates until they're done</span></h2>
   <ol class="steps">
-    <li><strong>Make the source repo private.</strong>
-      <code>smooth-screen-record</code> → <em>Settings → General → Visibility, project features, permissions →
-      Project visibility → Private</em>.</li>
-    <li><strong>Create a public releases project.</strong> A new GitLab project
-      <code>abdu.medhat94/mashhad-releases</code>, visibility <em>Public</em>. It can be empty — the generic
-      Package Registry needs no commits.</li>
-    <li><strong>Create the Homebrew tap repo.</strong> A new public repo
-      <code>abdu.medhat94/homebrew-mashhad</code> (the <code>homebrew-</code> prefix is required). Push the
-      contents of the <code>homebrew-mashhad/</code> folder from this repo into it.</li>
-    <li><strong>Add the publish token.</strong> In the <em>source</em> repo, <em>Settings → CI/CD → Variables</em>,
-      add <code>RELEASES_TOKEN</code> (masked, protected) — a Project/Group Access Token or PAT with
-      <code>api</code> scope and <em>write</em> access to <code>mashhad-releases</code>. The CI job and the local
-      publish script both use it.</li>
+    <li><strong>Push the source to GitHub.</strong> <code>mashhadio/mashhad</code>, <em>private</em>. The
+      workflows in <code>.github/workflows/</code> only run once the code is there.
+      <span class="muted">Also close any older public mirror of this code — a private repo here achieves
+      nothing while the same source is readable elsewhere.</span></li>
+    <li><strong>Create a release token.</strong> A fine-grained PAT with <em>Contents: read and write</em> on
+      <code>mashhadio/mashhad-releases</code>. Add it to the <em>source</em> repo as the
+      <code>RELEASES_TOKEN</code> secret (<em>Settings → Secrets and variables → Actions</em>).
+      <span class="muted">The automatic <code>GITHUB_TOKEN</code> can't be used: it only has access to the
+      repo running the workflow, and the assets go to a different one.</span></li>
+    <li><strong>Push the Homebrew tap.</strong> Copy the contents of <code>homebrew-mashhad/</code> into
+      <code>mashhadio/homebrew-mashhad</code> (the <code>homebrew-</code> prefix is what lets
+      <code>brew tap</code> resolve the shorthand).</li>
+    <li><strong>Turn on Pages — in the <em>public</em> releases repo.</strong> Push once to <code>main</code>
+      so the <code>Site</code> workflow creates the <code>gh-pages</code> branch, then in
+      <code>mashhadio/mashhad-releases</code>: <em>Settings → Pages → Deploy from a branch →
+      gh-pages / (root)</em>. DNS for an apex domain needs four <code>A</code> records —
+      <code>185.199.108.153</code>, <code>185.199.109.153</code>, <code>185.199.110.153</code>,
+      <code>185.199.111.153</code> — plus a <code>CNAME</code> for <code>www</code> →
+      <code>mashhadio.github.io</code>. The domain itself lives in <code>site/CNAME</code> and ships with
+      the pushed content.
+      <span class="muted">Pages can't run from the private source repo on a Free plan — it needs Pro or
+      higher. On Pro you could deploy Pages from this repo directly instead and drop the extra hop.</span></li>
     <li><strong>Publish a first release.</strong> Clients can only update <em>from</em> something already on
       the feed — see the runbook below.</li>
   </ol>
 
   <h2>Releasing a new version</h2>
-  <p>Bump the version first so the tag, <code>latest.yml</code>, and the Homebrew cask all match:</p>
-  <pre><code># 1) bump "version" in package.json (e.g. 0.1.0 -> 0.1.1), commit, and tag
-git commit -am "release 0.1.1"
-git tag v0.1.1 &amp;&amp; git push &amp;&amp; git push --tags</code></pre>
-
-  <h3>Windows <span class="muted">(built &amp; published locally — no Windows CI runner)</span></h3>
-  <pre><code>npm run dist:win                         # builds dist/Mashhad-&lt;version&gt;-x64.exe + latest.yml
-RELEASES_TOKEN=&lt;token&gt; npm run publish    # uploads exe + blockmap + latest.yml to the feed</code></pre>
-
-  <h3>Linux <span class="muted">(automatic on the pushed tag)</span></h3>
-  <p>The <code>build:linux</code> CI job builds the AppImage/<code>.deb</code> and runs
-    <code>npm run publish</code> for you (using <code>RELEASES_TOKEN</code>). Nothing to do beyond pushing the tag.</p>
-
-  <h3>macOS <span class="muted">(on a Mac — can't be cross-built)</span></h3>
-  <pre><code>npm run dist:mac                         # dist/Mashhad-&lt;version&gt;-arm64.dmg (+ .zip)
-RELEASES_TOKEN=&lt;token&gt; npm run publish
-shasum -a 256 dist/Mashhad-&lt;version&gt;-arm64.dmg   # copy the hash</code></pre>
-  <p>Then in <code>homebrew-mashhad/Casks/mashhad.rb</code> set <code>version</code> and <code>sha256</code>,
-    commit, and push the tap.</p>
+  <p>Bump the version in <strong>three</strong> files first so the tag, <code>latest.yml</code>, the download
+    page, and the Homebrew cask all match: <code>package.json</code>, <code>site/release.js</code>
+    (<code>VERSION</code>), and <code>homebrew-mashhad/Casks/mashhad.rb</code>.</p>
+  <pre><code>git commit -am "release 1.0.1"
+git tag v1.0.1 &amp;&amp; git push &amp;&amp; git push --tags</code></pre>
+  <p>That's the whole build step. The <code>Release</code> workflow fans out across four native runners —
+    <code>ubuntu-latest</code>, <code>windows-latest</code>, <code>macos-14</code> (Apple Silicon) and
+    <code>macos-13</code> (Intel) — and uploads every installer to a <strong>draft</strong> release in
+    <code>mashhad-releases</code>.</p>
+  <ol class="steps">
+    <li><strong>Review the draft release</strong> in <code>mashhadio/mashhad-releases</code> and confirm all
+      five artifacts are attached (<code>.exe</code>, two <code>.dmg</code>, <code>.AppImage</code>,
+      <code>.deb</code>) alongside the <code>latest*.yml</code> files.</li>
+    <li><strong>Publish it.</strong> Nothing updates for users until the draft is published — that is the
+      switch that flips the feed.</li>
+    <li><strong>Update the cask.</strong> Download both <code>.dmg</code> files from the release, then:
+      <pre><code>shasum -a 256 Mashhad-&lt;version&gt;-arm64.dmg Mashhad-&lt;version&gt;-x64.dmg</code></pre>
+      Set <code>version</code> and both <code>sha256 arm:</code> / <code>intel:</code> hashes in
+      <code>Casks/mashhad.rb</code>, commit, and push the tap.</li>
+  </ol>
+  <p class="muted">Building by hand instead (no CI): <code>npm run release:win</code> /
+    <code>release:mac</code> / <code>release:linux</code> with <code>GH_TOKEN</code> set do exactly the same
+    upload. The <code>dist:*</code> scripts build without uploading anything.</p>
 
   <div class="note warn">
     <p><strong>Verify an update end-to-end:</strong> install an <em>older</em> version than what's on the feed,
-    launch it → the banner should appear, download, and the restart button installs the new build. Confirm
-    the feed is reachable: open <code>…/mashhad/latest/latest.yml</code> in a browser (should download/show).</p>
+    launch it → the banner should appear, download, and the restart button installs the new build. A first
+    release can't be tested this way — there's nothing to update <em>from</em>, so cut a throwaway patch
+    version to prove the path works.</p>
   </div>
 
   <h2>How users install &amp; update</h2>
@@ -144,25 +169,49 @@ shasum -a 256 dist/Mashhad-&lt;version&gt;-arm64.dmg   # copy the hash</code></p
   <pre><code>chmod +x Mashhad-&lt;version&gt;-x86_64.AppImage &amp;&amp; ./Mashhad-&lt;version&gt;-x86_64.AppImage</code></pre>
   <p>AppImage updates in-app. For the <code>.deb</code>, reinstall the newer package.</p>
 
-  <h3>macOS (Homebrew)</h3>
-  <pre><code>brew tap abdu.medhat94/mashhad https://gitlab.com/abdu.medhat94/homebrew-mashhad.git
-brew install --cask mashhad     # install
-brew upgrade --cask mashhad     # update</code></pre>
+  <h3>macOS (Homebrew — recommended)</h3>
+  <pre><code>brew install --cask mashhadio/mashhad/mashhad   # install
+brew upgrade --cask mashhad                     # update</code></pre>
+  <p class="muted">No explicit <code>brew tap</code> needed — Homebrew resolves <code>owner/tap/cask</code>
+    shorthand against GitHub.</p>
+
+  <h3>macOS (manual <code>.dmg</code>)</h3>
+  <p>Download the <code>arm64</code> (Apple Silicon) or <code>x64</code> (Intel) <code>.dmg</code>, drag the app
+    to Applications, then clear the quarantine flag once — the build is unsigned, so without this macOS reports
+    it as damaged:</p>
+  <pre><code>xattr -dr com.apple.quarantine "/Applications/مشهد.app"</code></pre>
 
   <h2>Notes &amp; caveats</h2>
   <ul>
     <li><span class="pill">unsigned</span> Windows shows a SmartScreen prompt; macOS is Gatekeeper-quarantined
-      (the cask clears the quarantine flag automatically). Real signing/notarization is a separate, later step.</li>
+      (the cask clears the quarantine flag automatically). Real signing/notarization is a separate, later step —
+      and the thing that would let macOS self-update like the other platforms.</li>
+    <li><span class="pill">verify once</span> Apple Silicon requires at least an ad-hoc code signature to launch
+      at all. Confirm the first <code>arm64</code> <code>.dmg</code> actually opens on an Apple Silicon Mac; if
+      it's killed on launch, add an <code>afterPack</code> hook running <code>codesign -s -</code>.</li>
     <li>Versions must stay in lock-step: <code>package.json</code> version = git tag = filename = Homebrew cask
-      <code>version</code>.</li>
-    <li>The build scripts run <code>electron-builder … -p never</code> — they generate <code>latest.yml</code>
-      but never upload; uploading is done only by <code>scripts/publish-release.js</code>.</li>
+      <code>version</code> = <code>site/release.js</code> <code>VERSION</code>.</li>
+    <li>Both macOS jobs write a <code>latest-mac.yml</code> and the second overwrites the first. Harmless today
+      (the macOS check only reads the version out of it), but it would matter if macOS ever self-updates —
+      the surviving file lists only one architecture's <code>.zip</code>.</li>
+    <li><span class="pill">cross-arch</span> <code>ffmpeg-static</code> downloads a binary for the <em>host</em>
+      arch at install time, and skips the download if one is already present. CI sidesteps this by building each
+      arch on its own native runner; for local cross-builds, <code>scripts/ffmpeg-arch.js</code> deletes the
+      binary and re-runs <code>install.js</code> with <code>npm_config_arch</code> set. Passing that var to
+      <code>npm rebuild</code> does <em>not</em> work — npm ≥ 11 strips it — and the result is an installer that
+      silently ships the wrong ffmpeg.</li>
+    <li><span class="pill">billing</span> Actions minutes are only free-and-unlimited on <em>public</em>
+      repos. On a private repo they come out of the monthly allowance (2,000 min on Free) with multipliers:
+      Linux ×1, Windows ×2, <strong>macOS ×10</strong>. A full four-platform release is therefore on the
+      order of ~150–200 billed minutes, most of it the two macOS jobs — roughly ten releases a month before
+      the allowance runs out. If that gets tight, drop the Intel mac job and ship arm64 only, or build macOS
+      locally with <code>npm run release:mac</code>.</li>
     <li>The repo has been public in the past, so treat any previously committed secret as exposed and rotate it.</li>
   </ul>
 
   <footer>
     Generated for the مشهد (Mashhad) project · see <code>README.md</code>,
-    <code>scripts/publish-release.js</code>, and <code>src/main/updater.js</code>.
+    <code>.github/workflows/release.yml</code>, and <code>src/main/updater.js</code>.
   </footer>
 
 </div>

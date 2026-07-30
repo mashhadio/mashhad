@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>تنزيل «مشهد»، كل الأنظمة</title>
 <meta name="description" content="حمّل «مشهد» لويندوز أو ماك أو لينكس. مثبّت ‎.exe، وHomebrew أو ‎.dmg لماك، وAppImage أو ‎.deb للينكس.">
-<link rel="icon" type="image/svg+xml" href="../assets/brand/mashhad-favicon.svg">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
@@ -54,12 +54,14 @@
           <div class="os"><span class="glyph">🍎</span><b>ماك</b><span class="yours">نظامك</span></div>
           <div class="meta">ثبّته بإحدى طريقتين، عبر Homebrew (موصى به، يتضمّن التحديث) أو بتنزيل ملف <code>.dmg</code> مباشرة.</div>
           <div class="brew">
-            <code id="mac-brew">brew install --cask abdu.medhat94/mashhad/mashhad</code>
+            <code id="mac-brew" style="white-space:pre-line">…</code>
             <button type="button" class="copy" id="mac-brew-copy">نسخ</button>
           </div>
           <span class="fname" id="mac-name">…</span>
-          <a class="btn btn-ghost" id="mac-dl" href="#" style="justify-content:center">تنزيل ملف ‎.dmg مباشرة</a>
+          <a class="btn btn-ghost" id="mac-dl" href="#" style="justify-content:center">تنزيل ‎.dmg لمعالج Apple‏ (M1/M2/M3)</a>
+          <a class="btn btn-ghost" id="mac-dl-intel" href="#" style="justify-content:center">تنزيل ‎.dmg لمعالج Intel</a>
           <span class="sub">للتحديث عبر brew: <code id="mac-upgrade">brew upgrade --cask mashhad</code></span>
+          <span class="sub">مع التثبيت اليدويّ فقط: النسخة غير موقّعة، لذا شغّل هذا الأمر مرّة واحدة بعد نقل التطبيق إلى «التطبيقات» ليفتحه macOS <code id="mac-quarantine" style="white-space:pre-line">…</code></span>
         </div>
 
         <div class="dl" data-os="linux" id="dl-linux">
@@ -71,7 +73,7 @@
         </div>
 
       </div>
-      <p class="note-real">الإصدار الحاليّ: <b id="verLabel">v0.1.0</b>، تُشير الروابط إلى قناة الإصدارات العامّة على GitLab. تأكّد من مطابقة اسم الملف والإصدار عند أوّل نشر.</p>
+      <p class="note-real">الإصدار الحاليّ: <b id="verLabel">v1.0.0</b>، تُشير الروابط إلى صفحة الإصدارات العامّة على GitHub.</p>
     </section>
 
   </main>
@@ -98,11 +100,14 @@
   function set(id, attr, val){ var el=document.getElementById(id); if(el){ if(attr==="text") el.textContent=val; else el.setAttribute(attr,val); } }
 
   set("win-dl","href",F.win.url);   set("win-name","text",F.win.name);
-  set("mac-dl","href",F.mac.url);   set("mac-name","text",F.mac.name);
+  set("mac-dl","href",F.mac_arm64.url);
+  set("mac-dl-intel","href",F.mac_x64.url);
+  set("mac-name","text",F.mac.name);
   set("linux-dl","href",F.linux.url); set("linux-name","text",F.linux.name);
   set("deb-dl","href",F.deb.url);
   set("mac-brew","text",MASHHAD.BREW);
   set("mac-upgrade","text",MASHHAD.BREW_UPGRADE);
+  set("mac-quarantine","text",MASHHAD.MAC_QUARANTINE);
   set("verLabel","text","v"+MASHHAD.VERSION);
 
   var yr=document.getElementById("yr"); if(yr){ yr.textContent=String(new Date().getFullYear()); }

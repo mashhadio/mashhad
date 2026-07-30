@@ -156,6 +156,8 @@ with a runner per OS).
 | Linux | `npm run dist:linux` | `Mashhad-<version>-<arch>.AppImage` **and** `.deb` |
 
 `npm run dist` (no suffix) builds the default target for whatever OS you're currently on.
+On macOS, `npm run dist:mac:all` builds **both** architectures (arm64 then x64), swapping in the
+arch-matched `ffmpeg-static` binary before each — see [`scripts/ffmpeg-arch.js`](scripts/ffmpeg-arch.js).
 
 > First time on a machine? Run `npm install` before any `dist:*` command so
 > electron-builder and the native deps (`ffmpeg-static`, `uiohook-napi`) are present.
@@ -220,35 +222,39 @@ Then launch **Mashhad** from your applications menu (or run `Mashhad` in a termi
 
 ## Auto-update & distribution
 
-New versions reach users automatically where possible. The **source repo can stay private**
-while only the compiled installers are served from a **public** channel — so updates need no
-embedded credentials.
+New versions reach users automatically where possible. **This repo is private**; the compiled
+installers are served from a **separate public repo** (`mashhad-releases`) as GitHub release
+assets, so updates need no embedded credentials and the source stays closed.
 
 | Platform | How users get updates |
 |---|---|
 | **Windows** (NSIS) | In-app auto-update — a banner offers **restart to update** |
 | **Linux** AppImage | In-app auto-update (when run as a real AppImage) |
 | **Linux** `.deb` | Reinstall the newer package (no in-app updater) |
-| **macOS** | Homebrew — `brew upgrade --cask mashhad` |
+| **macOS** | In-app banner announces the version; installs via `brew upgrade --cask mashhad` or the `.dmg` link. Squirrel.Mac won't apply unsigned updates, so it can't self-install. |
 
-The in-app updater ([`src/main/updater.js`](src/main/updater.js)) reads a public **GitLab
-generic Package Registry** feed (a separate `mashhad-releases` project);
-[`scripts/publish-release.js`](scripts/publish-release.js) (`npm run publish`) uploads each
-build there. macOS goes through the Homebrew tap scaffolded in
-[`homebrew-mashhad/`](homebrew-mashhad/).
+The updater ([`src/main/updater.js`](src/main/updater.js)) reads the **GitHub releases** of
+[`mashhadio/mashhad-releases`](https://github.com/mashhadio/mashhad-releases); electron-builder
+uploads each build there directly. macOS also goes through the Homebrew tap in
+[`homebrew-mashhad/`](homebrew-mashhad/), and [`site/`](site/) is the public download page —
+[`.github/workflows/site.yml`](.github/workflows/site.yml) pushes it to the public releases repo's
+`gh-pages` branch, since Pages can't serve from a private repo on a Free plan.
 
 📄 **Full setup + per-release runbook: [`docs/distribution-setup.html`](docs/distribution-setup.html)**
-(open in a browser) — the one-time setup (make the repo private, create the public
-`mashhad-releases` + `homebrew-mashhad` repos, add the `RELEASES_TOKEN` CI variable, publish a
-first release) and how to cut each release.
+(open in a browser) — the one-time setup (push the source to GitHub, add the `RELEASES_TOKEN`
+secret, push the Homebrew tap, turn on Pages) and how to cut each release.
 
 **Releasing (quick reference):**
 ```bash
-# bump "version" in package.json, commit, then:
-git tag vX.Y.Z && git push && git push --tags          # Linux builds + publishes via CI
-npm run dist:win && RELEASES_TOKEN=… npm run publish    # Windows (built + published locally)
-# macOS (on a Mac): npm run dist:mac && npm run publish, then bump the Homebrew cask version+sha256
+# bump the version in package.json, site/release.js, and the Homebrew cask, then:
+git commit -am "release X.Y.Z"
+git tag vX.Y.Z && git push && git push --tags
 ```
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds Windows, Linux, and both
+macOS architectures on native runners and uploads them to a **draft** release. Review it, publish
+it, then update the cask's `version` + both `sha256` hashes. To build one platform by hand
+instead, `GH_TOKEN=… npm run release:win` (or `release:mac` / `release:linux`) does the same
+upload; the `dist:*` scripts build without uploading.
 
 ---
 

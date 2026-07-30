@@ -90,6 +90,9 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('update:status', handler);
   },
   restartToUpdate: () => ipcRenderer.invoke('update:restart'),
+  // macOS-only banner actions (unsigned builds can't self-install — see updater.js)
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  copyBrewCommand: () => ipcRenderer.invoke('update:copyBrew'),
 
   // window focus changes (used to pause live previews in the background)
   onWindowFocus: (cb) => {

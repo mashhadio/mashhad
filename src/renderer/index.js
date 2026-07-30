@@ -1422,33 +1422,54 @@ window.addEventListener('keydown', (e) => {
   else if ((e.key === '?' || e.key === '؟') && !typing) toggleShortcuts(true);
 });
 
-// Auto-update banner (packaged Windows/AppImage only; main stays silent otherwise).
-// States: available -> downloading (%) -> ready (show restart button) | error.
+// Update banner. On Windows/AppImage the update installs itself:
+//   available -> downloading (%) -> ready (show restart button) | error.
+// On macOS the build is unsigned and can't self-install, so main sends a single
+// `manual` state and the banner offers Homebrew or a direct .dmg download instead.
 if (window.api.onUpdateStatus) {
   const updateBanner = document.getElementById('updateBanner');
   const updateTitle = document.getElementById('updateTitle');
   const updateDetail = document.getElementById('updateDetail');
   const updateRestartBtn = document.getElementById('updateRestartBtn');
+  const updateCopyBrewBtn = document.getElementById('updateCopyBrewBtn');
+  const updateDownloadBtn = document.getElementById('updateDownloadBtn');
+
   updateRestartBtn.addEventListener('click', () => {
     updateDetail.textContent = 'جارٍ إعادة التشغيل…';
     updateRestartBtn.disabled = true;
     window.api.restartToUpdate();
   });
+  updateDownloadBtn.addEventListener('click', () => window.api.downloadUpdate());
+  updateCopyBrewBtn.addEventListener('click', () => {
+    window.api.copyBrewCommand();
+    updateCopyBrewBtn.textContent = 'تم النسخ ✓';
+    setTimeout(() => { updateCopyBrewBtn.textContent = 'نسخ أمر التحديث'; }, 2000);
+  });
+
   window.api.onUpdateStatus((s) => {
     if (!s || !s.state) return;
     if (s.state === 'error') { updateBanner.classList.remove('active'); return; }
     updateBanner.classList.add('active');
+    const show = (restart, mac) => {
+      updateRestartBtn.style.display = restart ? '' : 'none';
+      updateCopyBrewBtn.style.display = mac ? '' : 'none';
+      updateDownloadBtn.style.display = mac ? '' : 'none';
+    };
     if (s.state === 'available') {
       updateTitle.textContent = `يتوفّر تحديث جديد${s.version ? ` (${s.version})` : ''}.`;
       updateDetail.textContent = 'جارٍ التنزيل…';
-      updateRestartBtn.style.display = 'none';
+      show(false, false);
     } else if (s.state === 'downloading') {
       updateDetail.textContent = `جارٍ تنزيل التحديث… ${s.percent || 0}%`;
-      updateRestartBtn.style.display = 'none';
+      show(false, false);
     } else if (s.state === 'ready') {
       updateTitle.textContent = `تم تنزيل التحديث${s.version ? ` (${s.version})` : ''}.`;
       updateDetail.textContent = 'أعد تشغيل التطبيق لتثبيت النسخة الجديدة.';
-      updateRestartBtn.style.display = '';
+      show(true, false);
+    } else if (s.state === 'manual') {
+      updateTitle.textContent = `يتوفّر تحديث جديد${s.version ? ` (${s.version})` : ''}.`;
+      updateDetail.textContent = `حدّث عبر Homebrew (${s.brew || 'brew upgrade --cask mashhad'}) أو نزّل النسخة الجديدة.`;
+      show(false, true);
     }
   });
 }

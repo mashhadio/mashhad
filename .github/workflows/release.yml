@@ -1,0 +1,64 @@
+name: Release
+
+# Pushing a version tag builds every platform on its own native runner and uploads
+# the installers to a DRAFT release in the public mashhadio/mashhad-releases repo.
+# Review the draft, then publish it — that's what flips the update feed for users.
+#
+# Native runners matter here: ffmpeg-static and uiohook-napi both resolve per-arch at
+# install time, so each job gets the right binaries with no cross-build tricks.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false   # one platform failing shouldn't discard the others
+      matrix:
+        include:
+          - { name: linux,     os: ubuntu-latest,  script: 'release:linux' }
+          - { name: windows,   os: windows-latest, script: 'release:win' }
+          - { name: mac-arm64, os: macos-14,       script: 'release:mac:arm64' }  # Apple Silicon
+          - { name: mac-x64,   os: macos-13,       script: 'release:mac:x64' }    # Intel
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build and upload to the releases repo
+        env:
+          # Assets land in a DIFFERENT repo, so the automatic GITHUB_TOKEN is not
+          # enough — RELEASES_TOKEN must be a PAT with contents:write on
+          # mashhadio/mashhad-releases.
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          # No Apple Developer certificate on the runner; don't let electron-builder
+          # hunt the keychain for one.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run ${{ matrix.script }}
+
+      # Kept for debugging a failed release — the real artifacts go to the draft release.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.yml
+          if-no-files-found: ignore
+          retention-days: 7
