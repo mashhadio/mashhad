@@ -9,11 +9,13 @@ Homebrew **tap** for [مشهد (Mashhad)](https://github.com/mashhadio/mashhad-r
 ## Install (users)
 
 ```sh
-brew install --cask mashhadio/mashhad/mashhad
+brew tap mashhadio/mashhad
+brew install --cask mashhad
 ```
 
-Homebrew resolves `owner/tap/cask` shorthand against GitHub, so no explicit
-`brew tap` step is needed.
+The tap is only needed once; after that the cask token alone resolves. The
+one-shot equivalent is `brew install --cask mashhadio/mashhad/mashhad` —
+Homebrew resolves `owner/tap/cask` shorthand against GitHub without a tap step.
 
 ## Update (users)
 

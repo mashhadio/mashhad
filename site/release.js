@@ -25,9 +25,11 @@
 
   var LABELS = { win: "ويندوز", mac: "ماك", linux: "لينكس" };
 
-  // The tap is on GitHub, so Homebrew resolves the bare `owner/tap/cask` shorthand
-  // on its own — no explicit `brew tap` step needed.
-  var BREW = "brew install --cask " + OWNER + "/mashhad/mashhad";
+  // Adding the tap once keeps every later command short (`--cask mashhad` instead of
+  // the full `owner/tap/cask` path). Both lines copy as one block and run in sequence.
+  var BREW_TAP = "brew tap " + OWNER + "/mashhad";
+  var BREW_INSTALL = "brew install --cask mashhad";
+  var BREW = BREW_TAP + "\n" + BREW_INSTALL;
   var BREW_UPGRADE = "brew upgrade --cask mashhad";
 
   // The .dmg is unsigned (no Apple Developer certificate), so Gatekeeper quarantines
@@ -68,6 +70,8 @@
     FILES: FILES,
     LABELS: LABELS,
     BREW: BREW,
+    BREW_TAP: BREW_TAP,
+    BREW_INSTALL: BREW_INSTALL,
     BREW_UPGRADE: BREW_UPGRADE,
     MAC_QUARANTINE: MAC_QUARANTINE,
     detectOS: detectOS,

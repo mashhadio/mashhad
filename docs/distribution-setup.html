@@ -170,10 +170,13 @@ git tag v1.0.1 &amp;&amp; git push &amp;&amp; git push --tags</code></pre>
   <p>AppImage updates in-app. For the <code>.deb</code>, reinstall the newer package.</p>
 
   <h3>macOS (Homebrew — recommended)</h3>
-  <pre><code>brew install --cask mashhadio/mashhad/mashhad   # install
-brew upgrade --cask mashhad                     # update</code></pre>
-  <p class="muted">No explicit <code>brew tap</code> needed — Homebrew resolves <code>owner/tap/cask</code>
-    shorthand against GitHub.</p>
+  <pre><code>brew tap mashhadio/mashhad      # once
+brew install --cask mashhad     # install
+brew upgrade --cask mashhad     # update</code></pre>
+  <p class="muted">The tap is only needed once; after that the cask token alone resolves. The one-shot
+    equivalent is <code>brew install --cask mashhadio/mashhad/mashhad</code>. A bare
+    <code>brew install mashhad</code> with no tap at all would require the cask to live in
+    <strong>homebrew-cask</strong> itself — see the caveats below.</p>
 
   <h3>macOS (manual <code>.dmg</code>)</h3>
   <p>Download the <code>arm64</code> (Apple Silicon) or <code>x64</code> (Intel) <code>.dmg</code>, drag the app
@@ -206,6 +209,11 @@ brew upgrade --cask mashhad                     # update</code></pre>
       order of ~150–200 billed minutes, most of it the two macOS jobs — roughly ten releases a month before
       the allowance runs out. If that gets tight, drop the Intel mac job and ship arm64 only, or build macOS
       locally with <code>npm run release:mac</code>.</li>
+    <li><span class="pill">homebrew-cask</span> Getting a bare <code>brew install mashhad</code> (no tap)
+      means shipping the cask in Homebrew's official <strong>homebrew-cask</strong> repo. Two things block
+      that today: it rejects casks that strip the Gatekeeper quarantine flag, which this one does because
+      the app is unsigned; and it applies notability requirements the project would have to meet. Signing +
+      notarizing removes the <code>postflight</code> block and is the prerequisite for even trying.</li>
     <li>The repo has been public in the past, so treat any previously committed secret as exposed and rotate it.</li>
   </ul>
 
