@@ -5,10 +5,10 @@ cask "mashhad" do
 
   version "1.0.0"
 
-  # Fill both from the built .dmg files before pushing a release:
-  #   shasum -a 256 dist/Mashhad-<version>-arm64.dmg dist/Mashhad-<version>-x64.dmg
-  sha256 arm:   "0000000000000000000000000000000000000000000000000000000000000000",
-         intel: "0000000000000000000000000000000000000000000000000000000000000000"
+  # Refresh both on every release, from the published assets:
+  #   shasum -a 256 Mashhad-<version>-arm64.dmg Mashhad-<version>-x64.dmg
+  sha256 arm:   "8d00ee1aa7fdee1911f64d9a632ca8148df3a35b6773ad7b45762d11d77277ac",
+         intel: "1abe7f43e63a7104c4382c19cad21f188b3405257bd94a194202ffdf549d1536"
 
   # Attached to the tagged release in the public mashhad-releases repo, so Homebrew can
   # verify the sha256 against a URL that never changes under it.
@@ -18,7 +18,9 @@ cask "mashhad" do
   desc "Screen recorder with cursor-tracking smooth zoom and mic noise cleanup"
   homepage "https://mashhad.io"
 
-  depends_on macos: ">= :catalina"
+  # Symbol form already means ">= catalina"; the string form is deprecated and
+  # prints a warning on every `brew` invocation that touches the tap.
+  depends_on macos: :catalina
 
   app "مشهد.app"
 
