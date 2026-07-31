@@ -25,12 +25,18 @@
 
   var LABELS = { win: "ويندوز", mac: "ماك", linux: "لينكس" };
 
-  // Adding the tap once keeps every later command short (`--cask mashhad` instead of
-  // the full `owner/tap/cask` path). Both lines copy as one block and run in sequence.
+  // Three lines, and all three are required on Homebrew 6+:
+  //   tap    — Homebrew 6 no longer auto-taps, so `brew install owner/tap/cask` alone
+  //            fails with "This command requires the tap".
+  //   trust  — Homebrew 6 refuses to load casks from any third-party tap until it is
+  //            trusted once. Without it: "Refusing to load cask ... from untrusted tap".
+  //   install — after tapping, the bare name resolves to the cask, so no `--cask`.
+  // They copy as one block and run in sequence.
   var BREW_TAP = "brew tap " + OWNER + "/mashhad";
-  var BREW_INSTALL = "brew install --cask mashhad";
-  var BREW = BREW_TAP + "\n" + BREW_INSTALL;
-  var BREW_UPGRADE = "brew upgrade --cask mashhad";
+  var BREW_TRUST = "brew trust --tap " + OWNER + "/mashhad";
+  var BREW_INSTALL = "brew install mashhad";
+  var BREW = BREW_TAP + "\n" + BREW_TRUST + "\n" + BREW_INSTALL;
+  var BREW_UPGRADE = "brew upgrade mashhad";
 
   // The .dmg is unsigned (no Apple Developer certificate), so Gatekeeper quarantines
   // a direct download. Homebrew strips that automatically; a manual install needs this.
@@ -71,6 +77,7 @@
     LABELS: LABELS,
     BREW: BREW,
     BREW_TAP: BREW_TAP,
+    BREW_TRUST: BREW_TRUST,
     BREW_INSTALL: BREW_INSTALL,
     BREW_UPGRADE: BREW_UPGRADE,
     MAC_QUARANTINE: MAC_QUARANTINE,

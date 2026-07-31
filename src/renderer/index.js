@@ -1468,7 +1468,7 @@ if (window.api.onUpdateStatus) {
       show(true, false);
     } else if (s.state === 'manual') {
       updateTitle.textContent = `يتوفّر تحديث جديد${s.version ? ` (${s.version})` : ''}.`;
-      updateDetail.textContent = `حدّث عبر Homebrew (${s.brew || 'brew upgrade --cask mashhad'}) أو نزّل النسخة الجديدة.`;
+      updateDetail.textContent = `حدّث عبر Homebrew (${s.brew || 'brew upgrade mashhad'}) أو نزّل النسخة الجديدة.`;
       show(false, true);
     }
   });

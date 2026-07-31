@@ -234,7 +234,7 @@ assets, so updates need no embedded credentials and the source stays closed.
 | **Windows** (NSIS) | In-app auto-update — a banner offers **restart to update** |
 | **Linux** AppImage | In-app auto-update (when run as a real AppImage) |
 | **Linux** `.deb` | Reinstall the newer package (no in-app updater) |
-| **macOS** | In-app banner announces the version; installs via `brew upgrade --cask mashhad` or the `.dmg` link. Squirrel.Mac won't apply unsigned updates, so it can't self-install. |
+| **macOS** | In-app banner announces the version; installs via `brew upgrade mashhad` or the `.dmg` link. Squirrel.Mac won't apply unsigned updates, so it can't self-install. |
 
 The updater ([`src/main/updater.js`](src/main/updater.js)) reads the **GitHub releases** of
 [`mashhadio/mashhad-releases`](https://github.com/mashhadio/mashhad-releases); electron-builder
@@ -249,7 +249,9 @@ secret, push the Homebrew tap, turn on Pages) and how to cut each release.
 
 **Releasing (quick reference):**
 ```bash
-# bump the version in package.json, site/release.js, and the Homebrew cask, then:
+# bump the version in package.json and site/release.js, then (after the release is
+# published) refresh `version` + both sha256s in homebrew-mashhad/Casks/mashhad.rb
+# and push that to the mashhadio/homebrew-mashhad repo. Then:
 git commit -am "release X.Y.Z"
 git tag vX.Y.Z && git push && git push --tags
 ```

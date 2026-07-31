@@ -10,17 +10,24 @@ Homebrew **tap** for [مشهد (Mashhad)](https://github.com/mashhadio/mashhad-r
 
 ```sh
 brew tap mashhadio/mashhad
-brew install --cask mashhad
+brew trust --tap mashhadio/mashhad
+brew install mashhad
 ```
 
-The tap is only needed once; after that the cask token alone resolves. The
-one-shot equivalent is `brew install --cask mashhadio/mashhad/mashhad` —
-Homebrew resolves `owner/tap/cask` shorthand against GitHub without a tap step.
+All three lines are needed on Homebrew 6+, and only once:
+
+- `tap` — Homebrew 6 dropped auto-tapping, so `brew install mashhadio/mashhad/mashhad`
+  on its own fails with *"This command requires the tap"*.
+- `trust` — Homebrew 6 refuses to load a cask from any third-party tap until it's
+  trusted: *"Refusing to load cask … from untrusted tap"*. The decision is recorded
+  in `~/.homebrew/trust.json`. This applies to every tap outside `Homebrew/*`, not
+  just this one.
+- `install` — once tapped, the bare token resolves to the cask, so no `--cask` flag.
 
 ## Update (users)
 
 ```sh
-brew upgrade --cask mashhad
+brew upgrade mashhad
 ```
 
 Homebrew compares the installed version against `version` in `Casks/mashhad.rb`;

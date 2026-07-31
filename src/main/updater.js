@@ -19,7 +19,8 @@
 const { app, shell, clipboard } = require('electron');
 const https = require('https');
 
-const BREW_UPGRADE = 'brew upgrade --cask mashhad';
+// No `--cask` needed: once mashhadio/mashhad is tapped, the bare token resolves.
+const BREW_UPGRADE = 'brew upgrade mashhad';
 
 let autoUpdater = null;    // the electron-updater singleton, once initialised
 let macDownloadUrl = null; // direct .dmg link, set once a macOS update is found
