@@ -18,8 +18,8 @@
    meant to be public; never put anything here that isn't.
    ========================================================================== */
 (function(){
-  var CF_TOKEN = ""; // e.g. "a1b2c3d4e5f6..."
-  var GA_ID    = ""; // e.g. "G-XXXXXXXXXX"
+  var CF_TOKEN = "";              // e.g. "a1b2c3d4e5f6..."
+  var GA_ID    = "G-T85DY6XNXZ";
 
   var head = document.head || document.documentElement;
 
