@@ -157,9 +157,17 @@ function initAutoUpdate(getWindow) {
 
 // Quit and install a downloaded update (invoked from the renderer's "restart" button).
 // No-op if the updater never initialised or nothing was downloaded.
+//
+// Both arguments matter on Windows. quitAndInstall() defaults isSilent to FALSE,
+// and electron-updater only passes NSIS's /S flag when it's true — so the default
+// re-runs our assisted installer (nsis.oneClick is false) and the user gets the
+// whole first-install wizard, directory page included, just to apply a patch.
+// isForceRunAfter adds --force-run so the app comes back up afterwards, which is
+// what "restart to update" promises. (The autoInstallOnAppQuit path already
+// installs silently — see BaseUpdater.addQuitHandler — so only this one was wrong.)
 function installUpdate() {
   if (!autoUpdater) return;
-  try { autoUpdater.quitAndInstall(); } catch (err) { console.error('[update] install failed:', err && err.message); }
+  try { autoUpdater.quitAndInstall(true, true); } catch (err) { console.error('[update] install failed:', err && err.message); }
 }
 
 // The banner's download button. On Windows/AppImage this starts the real download
