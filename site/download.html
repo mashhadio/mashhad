@@ -86,7 +86,7 @@
       <a class="brand" href="index.html" style="font-size:17px"><svg viewBox="0 0 512 512" width="30" height="30" aria-hidden="true"><rect x="16" y="16" width="480" height="480" rx="112" fill="#FFFFFF" stroke="#D6DEE6" stroke-width="2"/><rect x="104" y="120" width="304" height="272" rx="52" fill="#E7ECF1" stroke="#1A2530" stroke-width="12"/><path d="M226 198 L226 314 L312 256 Z" fill="#2C3E50" stroke="#1A2530" stroke-width="10" stroke-linejoin="round"/><circle cx="350" cy="178" r="15" fill="#E23B2E"/></svg> مشهد</a>
       <span class="grow"></span>
       <a href="index.html#features">المميّزات</a>
-      <span>© <span id="yr">2026</span> مشهد، مسجّل شاشة بتكبير سلس.</span>
+      <span>© <span id="yr">1448</span> مشهد</span>
     </div>
   </footer>
 
@@ -110,7 +110,15 @@
   set("mac-quarantine","text",MASHHAD.MAC_QUARANTINE);
   set("verLabel","text","v"+MASHHAD.VERSION);
 
-  var yr=document.getElementById("yr"); if(yr){ yr.textContent=String(new Date().getFullYear()); }
+  // Hijri year (Umm al-Qura), Latin digits. Falls back to the value in the markup
+  // if Intl lacks the calendar.
+  var yr=document.getElementById("yr");
+  if(yr){
+    try {
+      var h=new Intl.DateTimeFormat("en-u-ca-islamic-umalqura",{year:"numeric"}).format(new Date()).replace(/[^0-9]/g,"");
+      if(h){ yr.textContent=h; }
+    } catch(_){}
+  }
 
   // highlight the visitor's OS
   var os = MASHHAD.detectOS();
