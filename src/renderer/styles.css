@@ -162,7 +162,16 @@ button:focus-visible, select:focus-visible, input:focus-visible, [tabindex]:focu
   letter-spacing: normal;
 }
 .topbar .spacer { flex: 1; }
-.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px rgba(94,134,174,0.7); }
+
+/* Brand mark beside the window title (assets/brand/mashhad-mark.svg). Inlined in the
+   markup rather than loaded as an <img> so the shapes can read the theme variables —
+   an <img> can't be recoloured, and this mark has to work on both the dark and the
+   light topbar. Only the record dot keeps a fixed brand colour. The triangle drops
+   the stroke the source file carries: at 22px it just muddies the glyph. */
+.brand-mark { width: 24px; height: 22px; flex: none; display: block; }
+.brand-mark .frame { fill: var(--panel-2); stroke: var(--text); stroke-width: 12; }
+.brand-mark .play  { fill: var(--text); }
+.brand-mark .rec   { fill: var(--danger); }
 
 .content { flex: 1; overflow: auto; padding: 22px; }
 

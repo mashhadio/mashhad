@@ -11,7 +11,13 @@
 <body>
   <div class="app">
     <div class="topbar">
-      <div class="dot"></div>
+      <!-- Decorative: the <h1> beside it already names the app, so it stays out of the
+           accessibility tree rather than being announced twice. -->
+      <svg class="brand-mark" viewBox="36 32 328 296" aria-hidden="true" focusable="false">
+        <rect class="frame" x="48" y="44" width="304" height="272" rx="52" />
+        <path class="play" d="M170 122 L170 238 L256 180 Z" />
+        <circle class="rec" cx="294" cy="102" r="15" />
+      </svg>
       <h1>مشهد</h1>
       <span class="status" id="topStatus"></span>
       <div class="spacer"></div>

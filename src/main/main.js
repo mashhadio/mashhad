@@ -121,10 +121,18 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
+    // `mainWindow` can be non-null *and* destroyed here: on macOS closing the
+    // window doesn't quit the app (see 'window-all-closed'), so the reference
+    // outlives the window. A truthiness check isn't enough — calling into the
+    // stale object throws "Object has been destroyed", and because this is an
+    // app-event handler with nothing above it to catch, that takes down the main
+    // process. Mirror 'activate' and put a window back instead.
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      if (app.isReady() && BrowserWindow.getAllWindows().length === 0) createWindow();
+      return;
     }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
   });
 }
 
