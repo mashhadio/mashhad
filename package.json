@@ -1,7 +1,7 @@
 {
   "name": "mashhad",
   "productName": "مشهد",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "مشهد — مسجّل شاشة مع تكبير سلس يتتبّع المؤشر وتنقية لضوضاء الميكروفون",
   "main": "src/main/main.js",
   "homepage": "https://mashhad.io",
@@ -10,101 +10,10 @@
     "email": "support@mashhad.io"
   },
   "license": "MIT",
-  "scripts": {
-    "start": "electron .",
-    "dist": "electron-builder -p never",
-    "dist:win": "electron-builder --win -p never",
-    "dist:mac": "electron-builder --mac -p never",
-    "dist:mac:arm64": "node scripts/ffmpeg-arch.js arm64 && electron-builder --mac --arm64 -p never",
-    "dist:mac:x64": "node scripts/ffmpeg-arch.js x64 && electron-builder --mac --x64 -p never",
-    "dist:mac:all": "npm run dist:mac:arm64 && npm run dist:mac:x64",
-    "dist:linux": "electron-builder --linux -p never",
-    "release:win": "electron-builder --win -p always",
-    "release:linux": "electron-builder --linux -p always",
-    "release:mac:arm64": "node scripts/ffmpeg-arch.js arm64 && electron-builder --mac --arm64 -p always",
-    "release:mac:x64": "node scripts/ffmpeg-arch.js x64 && electron-builder --mac --x64 -p always",
-    "release:mac": "npm run release:mac:arm64 && npm run release:mac:x64",
-    "icons": "node scripts/make-icons.js",
-    "brand": "node scripts/make-brand.js",
-    "logo": "node scripts/make-logo.js",
-    "og": "node scripts/make-og.js"
-  },
-  "devDependencies": {
-    "@resvg/resvg-js": "^2.6.2",
-    "electron": "^31.7.7",
-    "electron-builder": "^24.13.3",
-    "fontkit": "^2.0.4",
-    "png-to-ico": "^3.0.1",
-    "wawoff2": "^2.0.1"
-  },
   "dependencies": {
     "@mediapipe/selfie_segmentation": "^0.1.1675465747",
     "electron-updater": "^6.8.9",
     "ffmpeg-static": "^5.2.0",
     "uiohook-napi": "^1.5.4"
-  },
-  "build": {
-    "appId": "com.abdul.mashhad",
-    "productName": "مشهد",
-    "executableName": "Mashhad",
-    "artifactName": "Mashhad.${ext}",
-    "files": [
-      "src/**/*",
-      "assets/**/*",
-      "node_modules/**/*"
-    ],
-    "asarUnpack": [
-      "node_modules/ffmpeg-static/**",
-      "node_modules/uiohook-napi/**",
-      "assets/**"
-    ],
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "mashhadio",
-        "repo": "mashhad-releases"
-      }
-    ],
-    "win": {
-      "target": "nsis",
-      "icon": "build/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "shortcutName": "مشهد"
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "AudioVideo",
-      "synopsis": "مسجّل شاشة مع تكبير ذكي يتتبّع المؤشر",
-      "executableName": "Mashhad",
-      "icon": "build/icon.png"
-    },
-    "mac": {
-      "artifactName": "Mashhad-${arch}.${ext}",
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "icon": "build/icon.png",
-      "category": "public.app-category.video",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
-      "extendInfo": {
-        "NSCameraUsageDescription": "يستخدم «مشهد» الكاميرا لعرض الكاميرا الاختياري.",
-        "NSMicrophoneUsageDescription": "يسجّل «مشهد» الميكروفون للتعليق الصوتي.",
-        "NSScreenCaptureUsageDescription": "يسجّل «مشهد» شاشتك."
-      }
-    },
-    "dmg": {
-      "title": "مشهد"
-    }
   }
 }
