@@ -2,9 +2,13 @@
 
 Homebrew **tap** for [مشهد (Mashhad)](https://github.com/mashhadio/mashhad-releases) — the macOS distribution + update channel.
 
-> This folder is a **scaffold**. Push its contents to the public
-> [`mashhadio/homebrew-mashhad`](https://github.com/mashhadio/homebrew-mashhad) repo
-> (the `homebrew-` prefix is what lets `brew tap` find it).
+> **This file lives in two places.** The tap users actually fetch is
+> [`mashhadio/homebrew-mashhad`](https://github.com/mashhadio/homebrew-mashhad) (the `homebrew-`
+> prefix is what lets `brew tap` find it). A copy is kept under `homebrew-mashhad/` in the private
+> app repo so the cask sits next to the code that produces the `.dmg`.
+>
+> That copy is a **mirror, not a clone** — committing there publishes nothing. To ship a cask
+> change, copy the file into a checkout of the tap repo and push from there.
 
 ## Install (users)
 
@@ -43,17 +47,32 @@ when you publish a newer cask, `brew upgrade` pulls the new `.dmg`.
 macOS builds can't be cross-compiled from Linux or Windows — they run either on a Mac
 or on a `macos-*` CI runner.
 
+Normally CI does the building — tagging `vX.Y.Z` in the app repo runs the `Release`
+workflow. To build by hand instead:
+
 ```sh
 # in the app repo — builds arm64 and x64 back to back and uploads both:
 GH_TOKEN=<token> npm run release:mac
+```
 
-# then bump this cask:
-shasum -a 256 dist/Mashhad-<version>-arm64.dmg dist/Mashhad-<version>-x64.dmg
-#   -> edit Casks/mashhad.rb: set `version` and both `sha256 arm:` / `intel:` hashes
+Either way, once the release is **published**, bump the cask from the published assets:
+
+```sh
+shasum -a 256 Mashhad-<version>-arm64.dmg Mashhad-<version>-x64.dmg
+#   -> set `version` and both `sha256 arm:` / `intel:` hashes in Casks/mashhad.rb
+# then, IN A CHECKOUT OF THE TAP REPO (not the app repo's mirror):
 git commit -am "mashhad <version>" && git push
 ```
 
 `version`, the release tag (`v<version>`), and the uploaded filenames must all match.
+
+Then verify from a clean state — a wrong hash or a wrong `app` stanza is invisible
+until someone installs:
+
+```sh
+brew uninstall --cask mashhad; brew untap mashhadio/mashhad
+brew install mashhadio/mashhad/mashhad && open -a Mashhad
+```
 
 ## Notes
 

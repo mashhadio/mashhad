@@ -110,9 +110,11 @@
       <code>RELEASES_TOKEN</code> secret (<em>Settings → Secrets and variables → Actions</em>).
       <span class="muted">The automatic <code>GITHUB_TOKEN</code> can't be used: it only has access to the
       repo running the workflow, and the assets go to a different one.</span></li>
-    <li><strong>Push the Homebrew tap.</strong> Copy the contents of <code>homebrew-mashhad/</code> into
-      <code>mashhadio/homebrew-mashhad</code> (the <code>homebrew-</code> prefix is what lets
-      <code>brew tap</code> resolve the shorthand).</li>
+    <li><strong>Push the Homebrew tap.</strong> Copy the contents of <code>homebrew-mashhad/</code> into a
+      checkout of <code>mashhadio/homebrew-mashhad</code> and push from there (the <code>homebrew-</code> prefix
+      is what lets <code>brew tap</code> resolve the shorthand).
+      <span class="muted">The folder in this repo is a mirror kept for reference — it is not a clone of the tap,
+      so committing inside it publishes nothing.</span></li>
     <li><strong>Turn on Pages — in the <em>public</em> releases repo.</strong> Push once to <code>main</code>
       so the <code>Site</code> workflow creates the <code>gh-pages</code> branch, then in
       <code>mashhadio/mashhad-releases</code>: <em>Settings → Pages → Deploy from a branch →
@@ -128,15 +130,20 @@
   </ol>
 
   <h2>Releasing a new version</h2>
-  <p>Bump the version in <strong>three</strong> files first so the tag, <code>latest.yml</code>, the download
-    page, and the Homebrew cask all match: <code>package.json</code>, <code>site/release.js</code>
-    (<code>VERSION</code>), and <code>homebrew-mashhad/Casks/mashhad.rb</code>.</p>
+  <p>Bump the version in <strong>two</strong> files first so the tag, <code>latest.yml</code>, and the download
+    page match: <code>package.json</code> and <code>site/release.js</code> (<code>VERSION</code>). The Homebrew
+    cask is bumped <em>after</em> publishing — it needs the sha256 of the built <code>.dmg</code> files, which
+    don't exist yet.</p>
   <pre><code>git commit -am "release 1.0.1"
 git tag v1.0.1 &amp;&amp; git push &amp;&amp; git push --tags</code></pre>
-  <p>That's the whole build step. The <code>Release</code> workflow fans out across four native runners —
-    <code>ubuntu-latest</code>, <code>windows-latest</code>, <code>macos-14</code> (Apple Silicon) and
-    <code>macos-13</code> (Intel) — and uploads every installer to a <strong>draft</strong> release in
+  <p>That's the whole build step. The <code>Release</code> workflow fans out across four jobs —
+    <code>ubuntu-latest</code>, <code>windows-latest</code>, and <strong>both</strong> macOS builds on
+    <code>macos-14</code> — and uploads every installer to a <strong>draft</strong> release in
     <code>mashhad-releases</code>.</p>
+  <p class="muted">The Intel mac <em>cross-builds</em> on the Apple Silicon runner. GitHub retired the
+    <code>macos-13</code> Intel runners, and a job requesting them simply sits queued indefinitely rather than
+    failing. Cross-building is only safe because <code>scripts/ffmpeg-arch.js</code> swaps in the target-arch
+    ffmpeg first — see the cross-arch caveat below.</p>
   <ol class="steps">
     <li><strong>Review the draft release</strong> in <code>mashhadio/mashhad-releases</code> and confirm all
       five artifacts are attached (<code>.exe</code>, two <code>.dmg</code>, <code>.AppImage</code>,
@@ -146,7 +153,16 @@ git tag v1.0.1 &amp;&amp; git push &amp;&amp; git push --tags</code></pre>
     <li><strong>Update the cask.</strong> Download both <code>.dmg</code> files from the release, then:
       <pre><code>shasum -a 256 Mashhad-&lt;version&gt;-arm64.dmg Mashhad-&lt;version&gt;-x64.dmg</code></pre>
       Set <code>version</code> and both <code>sha256 arm:</code> / <code>intel:</code> hashes in
-      <code>Casks/mashhad.rb</code>, commit, and push the tap.</li>
+      <code>Casks/mashhad.rb</code>, then push to <code>mashhadio/homebrew-mashhad</code>.
+      <span class="muted"><strong>Careful:</strong> <code>homebrew-mashhad/</code> in this repo is a
+      <em>mirror</em>, not a clone of the tap. Editing it and running <code>git commit</code> there commits to
+      the private source repo and changes nothing for users — the file has to be copied into a checkout of the
+      tap repo and pushed from there.</span></li>
+    <li><strong>Verify the install.</strong> From a clean state
+      (<code>brew uninstall --cask mashhad; brew untap mashhadio/mashhad</code>) run
+      <code>brew install mashhadio/mashhad/mashhad</code> and launch the app. This catches a wrong
+      <code>sha256</code>, a wrong <code>app</code> stanza, and a quarantine that didn't get stripped — none of
+      which show up until someone actually installs.</li>
   </ol>
   <p class="muted">Building by hand instead (no CI): <code>npm run release:win</code> /
     <code>release:mac</code> / <code>release:linux</code> with <code>GH_TOKEN</code> set do exactly the same
@@ -170,36 +186,49 @@ git tag v1.0.1 &amp;&amp; git push &amp;&amp; git push --tags</code></pre>
   <p>AppImage updates in-app. For the <code>.deb</code>, reinstall the newer package.</p>
 
   <h3>macOS (Homebrew — recommended)</h3>
-  <pre><code>brew tap mashhadio/mashhad      # once
-brew install --cask mashhad     # install
-brew upgrade --cask mashhad     # update</code></pre>
-  <p class="muted">The tap is only needed once; after that the cask token alone resolves. The one-shot
-    equivalent is <code>brew install --cask mashhadio/mashhad/mashhad</code>. A bare
-    <code>brew install mashhad</code> with no tap at all would require the cask to live in
-    <strong>homebrew-cask</strong> itself — see the caveats below.</p>
+  <pre><code>brew install mashhadio/mashhad/mashhad   # install
+brew upgrade mashhad                     # update</code></pre>
+  <p class="muted">One command, no <code>brew tap</code>, no <code>brew trust</code>, no <code>--cask</code>.
+    The fully-qualified <code>owner/tap/cask</code> path makes Homebrew 6 auto-tap the repo <em>and</em> record
+    trust for the cask in <code>~/.homebrew/trust.json</code>, which is why the short token works for
+    <code>upgrade</code> afterwards.</p>
+  <div class="note warn">
+    <p><strong>Don't publish the tap-first form.</strong> <code>brew tap mashhadio/mashhad</code> followed by
+    <code>brew install mashhad</code> looks tidier and is broken: Homebrew 6 requires a third-party tap to be
+    trusted before a <em>short</em> name will load out of it, so it fails with
+    <code>Refusing to load cask … from untrusted tap</code> and needs a <code>brew trust</code> call to
+    recover. The longer-looking one-shot is genuinely the one-step path.</p>
+  </div>
 
   <h3>macOS (manual <code>.dmg</code>)</h3>
   <p>Download the <code>arm64</code> (Apple Silicon) or <code>x64</code> (Intel) <code>.dmg</code>, drag the app
     to Applications, then clear the quarantine flag once — the build is unsigned, so without this macOS reports
     it as damaged:</p>
-  <pre><code>xattr -dr com.apple.quarantine "/Applications/مشهد.app"</code></pre>
+  <pre><code>xattr -dr com.apple.quarantine /Applications/Mashhad.app</code></pre>
+  <p class="muted">The bundle on disk is <code>Mashhad.app</code> — electron-builder falls back to
+    <code>executableName</code> for the filename because <code>productName</code> is non-ASCII. Only the
+    <em>display</em> name (<code>CFBundleName</code>) is مشهد, so an Arabic path here matches nothing and the
+    command silently does no good.</p>
 
   <h2>Notes &amp; caveats</h2>
   <ul>
     <li><span class="pill">unsigned</span> Windows shows a SmartScreen prompt; macOS is Gatekeeper-quarantined
       (the cask clears the quarantine flag automatically). Real signing/notarization is a separate, later step —
       and the thing that would let macOS self-update like the other platforms.</li>
-    <li><span class="pill">verify once</span> Apple Silicon requires at least an ad-hoc code signature to launch
-      at all. Confirm the first <code>arm64</code> <code>.dmg</code> actually opens on an Apple Silicon Mac; if
-      it's killed on launch, add an <code>afterPack</code> hook running <code>codesign -s -</code>.</li>
+    <li><span class="pill">verify once</span> Apple Silicon refuses to launch a binary with no code signature at
+      all. The 1.0.0 <code>arm64</code> build was checked and carries one
+      (<code>codesign -dv</code> → <code>Signature=adhoc</code>, <code>flags=0x20002(adhoc,linker-signed)</code>),
+      applied by the linker on the arm64 runner — so no <code>afterPack</code> hook is needed. The x64 build has
+      no signature, which is fine because Intel doesn't require one. Still worth opening the <code>arm64</code>
+      <code>.dmg</code> on real Apple Silicon hardware once; the signature check is necessary but not sufficient.</li>
     <li>Versions must stay in lock-step: <code>package.json</code> version = git tag = filename = Homebrew cask
       <code>version</code> = <code>site/release.js</code> <code>VERSION</code>.</li>
     <li>Both macOS jobs write a <code>latest-mac.yml</code> and the second overwrites the first. Harmless today
       (the macOS check only reads the version out of it), but it would matter if macOS ever self-updates —
       the surviving file lists only one architecture's <code>.zip</code>.</li>
     <li><span class="pill">cross-arch</span> <code>ffmpeg-static</code> downloads a binary for the <em>host</em>
-      arch at install time, and skips the download if one is already present. CI sidesteps this by building each
-      arch on its own native runner; for local cross-builds, <code>scripts/ffmpeg-arch.js</code> deletes the
+      arch at install time, and skips the download if one is already present. Since both macOS builds now share
+      one Apple Silicon runner, the x64 job depends on <code>scripts/ffmpeg-arch.js</code>, which deletes the
       binary and re-runs <code>install.js</code> with <code>npm_config_arch</code> set. Passing that var to
       <code>npm rebuild</code> does <em>not</em> work — npm ≥ 11 strips it — and the result is an installer that
       silently ships the wrong ffmpeg.</li>
