@@ -35,10 +35,15 @@ jobs:
           SELECTED: ${{ github.event.inputs.platforms }}
         run: |
           set -euo pipefail
+          # Both mac targets run on the Apple Silicon runner and the x64 one
+          # cross-builds. Intel macOS runners (macos-13) are retired/scarce and the
+          # job simply sits queued forever. Cross-building is safe here because
+          # scripts/ffmpeg-arch.js swaps in the target-arch ffmpeg first — without
+          # that, an x64 .dmg would silently ship an arm64 ffmpeg.
           ALL='[{"name":"linux","os":"ubuntu-latest","script":"release:linux"},
                 {"name":"windows","os":"windows-latest","script":"release:win"},
                 {"name":"mac-arm64","os":"macos-14","script":"release:mac:arm64"},
-                {"name":"mac-x64","os":"macos-13","script":"release:mac:x64"}]'
+                {"name":"mac-x64","os":"macos-14","script":"release:mac:x64"}]'
           if [ -z "${SELECTED:-}" ]; then
             INCLUDE=$(echo "$ALL" | jq -c '.')
           else
