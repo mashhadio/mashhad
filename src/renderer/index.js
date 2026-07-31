@@ -1422,8 +1422,8 @@ window.addEventListener('keydown', (e) => {
   else if ((e.key === '?' || e.key === '؟') && !typing) toggleShortcuts(true);
 });
 
-// Update banner. On Windows/AppImage the update installs itself:
-//   available -> downloading (%) -> ready (show restart button) | error.
+// Update banner. On Windows/AppImage nothing downloads until the user asks:
+//   available (show update button) -> downloading (%) -> ready (show restart) | error.
 // On macOS the build is unsigned and can't self-install, so main sends a single
 // `manual` state and the banner offers Homebrew or a direct .dmg download instead.
 if (window.api.onUpdateStatus) {
@@ -1446,32 +1446,46 @@ if (window.api.onUpdateStatus) {
     setTimeout(() => { updateCopyBrewBtn.textContent = 'نسخ أمر التحديث'; }, 2000);
   });
 
-  window.api.onUpdateStatus((s) => {
+  const show = ({ restart = false, brew = false, download = false }) => {
+    updateRestartBtn.style.display = restart ? '' : 'none';
+    updateCopyBrewBtn.style.display = brew ? '' : 'none';
+    updateDownloadBtn.style.display = download ? '' : 'none';
+  };
+
+  const applyStatus = (s) => {
     if (!s || !s.state) return;
     if (s.state === 'error') { updateBanner.classList.remove('active'); return; }
     updateBanner.classList.add('active');
-    const show = (restart, mac) => {
-      updateRestartBtn.style.display = restart ? '' : 'none';
-      updateCopyBrewBtn.style.display = mac ? '' : 'none';
-      updateDownloadBtn.style.display = mac ? '' : 'none';
-    };
     if (s.state === 'available') {
+      // Nothing has been downloaded yet — autoDownload is off, so this button is
+      // what starts it. Don't promise a download that hasn't been asked for.
       updateTitle.textContent = `يتوفّر تحديث جديد${s.version ? ` (${s.version})` : ''}.`;
-      updateDetail.textContent = 'جارٍ التنزيل…';
-      show(false, false);
+      updateDetail.textContent = 'اضغط «تحديث الآن» لتنزيله وتثبيته.';
+      updateDownloadBtn.textContent = 'تحديث الآن';
+      show({ download: true });
     } else if (s.state === 'downloading') {
       updateDetail.textContent = `جارٍ تنزيل التحديث… ${s.percent || 0}%`;
-      show(false, false);
+      show({});
     } else if (s.state === 'ready') {
       updateTitle.textContent = `تم تنزيل التحديث${s.version ? ` (${s.version})` : ''}.`;
       updateDetail.textContent = 'أعد تشغيل التطبيق لتثبيت النسخة الجديدة.';
-      show(true, false);
+      show({ restart: true });
     } else if (s.state === 'manual') {
       updateTitle.textContent = `يتوفّر تحديث جديد${s.version ? ` (${s.version})` : ''}.`;
       updateDetail.textContent = `حدّث عبر Homebrew (${s.brew || 'brew upgrade mashhad'}) أو نزّل النسخة الجديدة.`;
-      show(false, true);
+      updateDownloadBtn.textContent = 'تنزيل النسخة الجديدة';
+      show({ brew: true, download: true });
     }
-  });
+  };
+
+  window.api.onUpdateStatus(applyStatus);
+
+  // main may have found an update before this listener existed — the mac check
+  // sends exactly once, so a lost message means no banner at all. Ask for the
+  // current status now that we're listening.
+  if (window.api.getUpdateStatus) {
+    window.api.getUpdateStatus().then(applyStatus).catch(() => {});
+  }
 }
 
 // Global start/stop hotkey (fires even when the app isn't focused).

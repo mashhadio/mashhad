@@ -2,8 +2,10 @@
 
 // In-app update. Two modes, picked by platform:
 //
-//   Windows (NSIS) and Linux AppImage — full electron-updater: the new build is
-//   downloaded in the background and applied when the user clicks "restart".
+//   Windows (NSIS) and Linux AppImage — full electron-updater, but the download is
+//   user-initiated (autoDownload is off): finding an update only raises the banner,
+//   the user presses its button to download, and the build is applied when they
+//   click "restart".
 //
 //   macOS — notify-only. electron-updater's mac path goes through Squirrel.Mac,
 //   which refuses to apply an update that isn't code-signed, and we have no Apple
@@ -24,6 +26,16 @@ const BREW_UPGRADE = 'brew upgrade mashhad';
 
 let autoUpdater = null;    // the electron-updater singleton, once initialised
 let macDownloadUrl = null; // direct .dmg link, set once a macOS update is found
+
+// Last status pushed to the renderer. `webContents.send` is fire-and-forget and
+// `ipcRenderer.on` is not retroactive, so anything sent before the renderer has
+// wired up its listener is lost with no trace. Windows survives that by accident —
+// electron-updater keeps emitting (available -> progress... -> ready) — but the
+// macOS branch sends exactly one message, racing the renderer's first paint. It
+// also matters when the window is recreated (macOS keeps the app alive with no
+// window), which leaves a fresh renderer that missed everything. So keep the last
+// status here and let the renderer pull it on load; see 'update:get'.
+let lastStatus = null;
 
 // Read the release target from package.json so it has a single source of truth —
 // change it there and both this updater and electron-builder follow.
@@ -108,6 +120,7 @@ function initAutoUpdate(getWindow) {
   if (process.platform === 'linux' && !process.env.APPIMAGE) return;  // AppImage only (not .deb)
 
   const send = (payload) => {
+    lastStatus = payload;
     const win = getWindow && getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('update:status', payload);
   };
@@ -126,7 +139,11 @@ function initAutoUpdate(getWindow) {
     return;
   }
 
-  autoUpdater.autoDownload = true;          // fetch in the background as soon as one is found
+  // Ask before spending the user's bandwidth: `update-available` only lights up the
+  // banner, and the download starts when they press its button (-> startDownload).
+  // Downloading unprompted is a surprise on a metered or slow connection, and the
+  // installer is ~100 MB.
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;  // if the user doesn't click "restart", apply on next quit
 
   autoUpdater.on('update-available', (info) => send({ state: 'available', version: info && info.version }));
@@ -145,14 +162,33 @@ function installUpdate() {
   try { autoUpdater.quitAndInstall(); } catch (err) { console.error('[update] install failed:', err && err.message); }
 }
 
-// The two macOS banner actions. The .dmg URL is built in main — the renderer never
+// The banner's download button. On Windows/AppImage this starts the real download
+// (autoDownload is off, so nothing has been fetched yet) and progress comes back
+// through 'download-progress'. On macOS there is nothing to self-install, so it just
+// opens the .dmg in the browser. The .dmg URL is built in main — the renderer never
 // supplies it — so there's no way to steer openExternal at an arbitrary target.
-function openDownload() {
-  if (macDownloadUrl) shell.openExternal(macDownloadUrl).catch((err) => console.error('[update] open failed:', err && err.message));
+function startDownload() {
+  if (process.platform === 'darwin') {
+    if (macDownloadUrl) shell.openExternal(macDownloadUrl).catch((err) => console.error('[update] open failed:', err && err.message));
+    return;
+  }
+  if (!autoUpdater) return;
+  try {
+    const p = autoUpdater.downloadUpdate();
+    if (p && p.catch) p.catch((err) => console.error('[update] download failed:', err && err.message));
+  } catch (err) {
+    console.error('[update] download failed:', err && err.message);
+  }
 }
 
 function copyBrewCommand() {
   clipboard.writeText(BREW_UPGRADE);
 }
 
-module.exports = { initAutoUpdate, installUpdate, openDownload, copyBrewCommand };
+// Replayed to a renderer that wired up its listener after the last send, or to a
+// fresh one after the window was recreated. Null when nothing has been found.
+function currentStatus() {
+  return lastStatus;
+}
+
+module.exports = { initAutoUpdate, installUpdate, startDownload, copyBrewCommand, currentStatus };

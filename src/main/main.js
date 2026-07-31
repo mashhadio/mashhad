@@ -8,7 +8,7 @@ const { pathToFileURL } = require('url');
 
 const { startCursorTracking, stopCursorTracking, resetCursorTracking } = require('./cursor-tracker');
 const { exportVideo, exportCleanAudio, probeHasAudio, killAllFfmpeg } = require('./ffmpeg-export');
-const { initAutoUpdate, installUpdate, openDownload, copyBrewCommand } = require('./updater');
+const { initAutoUpdate, installUpdate, startDownload, copyBrewCommand, currentStatus } = require('./updater');
 
 // ---------------------------------------------------------------------------
 // Paths / state
@@ -1421,9 +1421,14 @@ ipcMain.handle('settings:set', async (_evt, patch) => {
 // ---------------------------------------------------------------------------
 // Renderer's "restart to update" button — quit and install the downloaded update.
 ipcMain.handle('update:restart', () => { installUpdate(); return { ok: true }; });
-// macOS banner (notify-only): open the .dmg in the browser, or copy the brew command.
-ipcMain.handle('update:download', () => { openDownload(); return { ok: true }; });
+// Renderer's update button: starts the download on Windows/AppImage, opens the .dmg
+// in the browser on macOS (notify-only there — see updater.js).
+ipcMain.handle('update:download', () => { startDownload(); return { ok: true }; });
+// macOS banner: copy the Homebrew upgrade command.
 ipcMain.handle('update:copyBrew', () => { copyBrewCommand(); return { ok: true }; });
+// Pull the latest status. The push above can land before the renderer is listening
+// (or go to a window that has since been replaced), so the renderer asks on load.
+ipcMain.handle('update:get', () => currentStatus());
 
 app.whenReady().then(() => {
   // Auto-grant only the specific media permissions our own renderer pages need,
