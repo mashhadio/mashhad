@@ -8,7 +8,7 @@ Mashhad is a desktop application, not a SaaS or a browser extension. Recording, 
 - Download: https://mashhad.io/download.html
 - Releases: https://github.com/mashhadio/mashhad-releases
 - Support: support@mashhad.io
-- Current version: 1.0.2
+- Current version: 1.0.5
 
 ## Product
 

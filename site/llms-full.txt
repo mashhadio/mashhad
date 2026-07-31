@@ -14,7 +14,7 @@ The interface is Arabic and right-to-left throughout, designed natively in Arabi
 - Download: https://mashhad.io/download.html
 - Releases: https://github.com/mashhadio/mashhad-releases
 - Support: support@mashhad.io
-- Current version: 1.0.2
+- Current version: 1.0.5
 - Price: free
 - License: MIT
 
@@ -146,7 +146,7 @@ Capability keywords: مكتبة التسجيلات، إعادة فتح التس�
 ### Windows
 
 - **Requirement**: Windows 10 or 11, 64-bit.
-- **Artifact**: `Mashhad-<version>-x64.exe` — an NSIS installer that lets you choose the install directory and creates Start-menu and desktop shortcuts.
+- **Artifact**: `Mashhad.exe` — an NSIS installer that lets you choose the install directory and creates Start-menu and desktop shortcuts.
 - **Gatekeeping**: the installer is not code-signed, so SmartScreen may show a blue "Windows protected your PC" dialog. Choose **More info → Run anyway**.
 - **Permissions**: none required beyond a normal install.
 - **Updates**: full in-app auto-update. A banner offers to restart and update.
@@ -163,7 +163,7 @@ Later updates: `brew upgrade mashhad`.
 
 The fully-qualified `owner/tap/cask` path matters — Homebrew auto-taps and records trust for the cask in one command. Splitting it into a separate `brew tap` followed by `brew install mashhad` leaves the tap present but untrusted, and the install is then refused with "Refusing to load cask … from untrusted tap".
 
-**Manual `.dmg` install (fallback):** separate builds are published for Apple Silicon (`Mashhad-<version>-arm64.dmg`) and Intel (`Mashhad-<version>-x64.dmg`). The build carries no Apple Developer signature, so a directly downloaded `.dmg` is quarantined by Gatekeeper. Move the app to `/Applications`, then run this **before the first launch**:
+**Manual `.dmg` install (fallback):** separate builds are published for Apple Silicon (`Mashhad-arm64.dmg`) and Intel (`Mashhad-x64.dmg`). The build carries no Apple Developer signature, so a directly downloaded `.dmg` is quarantined by Gatekeeper. Move the app to `/Applications`, then run this **before the first launch**:
 
 ```
 xattr -dr com.apple.quarantine /Applications/Mashhad.app
@@ -177,8 +177,8 @@ Note that the bundle on disk is named `Mashhad.app`; only its display name is م
 
 ### Linux
 
-- **AppImage**: `Mashhad-<version>-x86_64.AppImage`. Mark it executable (`chmod +x`) and run it. Supports in-app auto-update when run as a real AppImage.
-- **Debian / Ubuntu**: `Mashhad-<version>-amd64.deb`, installed with `sudo apt install ./Mashhad-<version>-amd64.deb`. No in-app updater — install the newer package to update.
+- **AppImage**: `Mashhad.AppImage`. Mark it executable (`chmod +x`) and run it. Supports in-app auto-update when run as a real AppImage.
+- **Debian / Ubuntu**: `Mashhad.deb`, installed with `sudo apt install ./Mashhad.deb`. No in-app updater — install the newer package to update.
 - **Display server**: the global cursor hook that powers the smooth zoom needs an **X11** session. Under Wayland, cursor tracking may not work, though screen recording itself still does.
 
 ---

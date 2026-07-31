@@ -4,7 +4,7 @@
    Used by index.html and download.html.
    ========================================================================== */
 (function(){
-  var VERSION = "1.0.2";
+  var VERSION = "1.0.5";
 
   // GitHub account that owns the PUBLIC `mashhad-releases` + `homebrew-mashhad`
   // repos. Change this one line if the account changes — everything below
@@ -14,13 +14,17 @@
   // Assets attached to the tagged GitHub release.
   var BASE = "https://github.com/" + OWNER + "/mashhad-releases/releases/download/v" + VERSION;
 
+  // Asset names must match build.artifactName / build.mac.artifactName in package.json.
+  // The version is not in the filename — it is already in BASE, which is built from the
+  // tag. Only macOS carries an arch suffix, because its two builds share one release and
+  // would otherwise overwrite each other.
   // Sizes are approximate — refresh them from dist/ after each real build.
   var FILES = {
-    win:       { name: "Mashhad-" + VERSION + "-x64.exe",         size: "~95 م.ب",  url: BASE + "/Mashhad-" + VERSION + "-x64.exe" },
-    mac_arm64: { name: "Mashhad-" + VERSION + "-arm64.dmg",       size: "~130 م.ب", url: BASE + "/Mashhad-" + VERSION + "-arm64.dmg" },
-    mac_x64:   { name: "Mashhad-" + VERSION + "-x64.dmg",         size: "~130 م.ب", url: BASE + "/Mashhad-" + VERSION + "-x64.dmg" },
-    linux:     { name: "Mashhad-" + VERSION + "-x86_64.AppImage", size: "~100 م.ب", url: BASE + "/Mashhad-" + VERSION + "-x86_64.AppImage" },
-    deb:       { name: "Mashhad-" + VERSION + "-amd64.deb",       size: "~98 م.ب",  url: BASE + "/Mashhad-" + VERSION + "-amd64.deb" }
+    win:       { name: "Mashhad.exe",        size: "~95 م.ب",  url: BASE + "/Mashhad.exe" },
+    mac_arm64: { name: "Mashhad-arm64.dmg",  size: "~130 م.ب", url: BASE + "/Mashhad-arm64.dmg" },
+    mac_x64:   { name: "Mashhad-x64.dmg",    size: "~130 م.ب", url: BASE + "/Mashhad-x64.dmg" },
+    linux:     { name: "Mashhad.AppImage",   size: "~100 م.ب", url: BASE + "/Mashhad.AppImage" },
+    deb:       { name: "Mashhad.deb",        size: "~98 م.ب",  url: BASE + "/Mashhad.deb" }
   };
 
   var LABELS = { win: "ويندوز", mac: "ماك", linux: "لينكس" };

@@ -3,16 +3,19 @@ cask "mashhad" do
   # substitutes into the url below as #{arch}.
   arch arm: "arm64", intel: "x64"
 
-  version "1.0.2"
+  version "1.0.5"
 
   # Refresh both on every release, from the published assets:
-  #   shasum -a 256 Mashhad-<version>-arm64.dmg Mashhad-<version>-x64.dmg
-  sha256 arm:   "a346aaf9f0b5afdb08baa80e4f33660a6562285e411a2ea5afe7d633bedfb0e4",
-         intel: "049a4adf73856b2d12a048f38a3552065f8a499337ad365f0bb4e9bc2bad9dda"
+  #   shasum -a 256 Mashhad-arm64.dmg Mashhad-x64.dmg
+  sha256 arm:   "2130f38850b77d164179c31f00f05a818d942f26a5f711fb44457d5ad66d8f86",
+         intel: "149c4575a23fcb1261c0127288b789a8ddfaf39e4cb6ac3f865e4a7454fc8c11"
 
   # Attached to the tagged release in the public mashhad-releases repo, so Homebrew can
-  # verify the sha256 against a URL that never changes under it.
-  url "https://github.com/mashhadio/mashhad-releases/releases/download/v#{version}/Mashhad-#{version}-#{arch}.dmg"
+  # verify the sha256 against a URL that never changes under it. The filename carries no
+  # version — the tag in the path already pins it — but it must keep #{arch}: both macOS
+  # builds land in the same release and a bare Mashhad.dmg would collide. Renamed as of
+  # 1.0.5; do not point this at 1.0.2 or earlier, whose assets are Mashhad-<version>-<arch>.dmg.
+  url "https://github.com/mashhadio/mashhad-releases/releases/download/v#{version}/Mashhad-#{arch}.dmg"
   name "مشهد"
   name "Mashhad"
   desc "Screen recorder with cursor-tracking smooth zoom and mic noise cleanup"
