@@ -91,14 +91,6 @@
           </a>
         </div>
 
-        <!-- mac only: the direct .dmg needs a manual step, so say so next to the button.
-             Revealed by the os === "mac" branch below, which also moves #heroBrew above
-             the .cta so Homebrew reads as the primary route. -->
-        <div class="warn-box" id="macDmgNote" hidden>
-          <span class="tb-ic" aria-hidden="true">⚠️</span>
-          <span><b>تنزيل ‎.dmg مباشرة؟</b> النسخة غير موقّعة بشهادة Apple، لذا يمنعها macOS عند أوّل فتح وينقلها إلى سلّة المهملات. تثبيت Homebrew أعلاه يتجاوز ذلك تلقائيًّا. <a href="download.html">تفاصيل الطريقة اليدويّة ←</a></span>
-        </div>
-
         <!-- mac: brew (shown by JS on macOS) -->
         <div class="brewbox" id="heroBrew" hidden>
           <span class="brew-lb">أو ثبّته وحدّثه عبر Homebrew:</span>
@@ -292,11 +284,6 @@
         </details>
 
         <details class="qa">
-          <summary>لماذا يمنع macOS فتح التطبيق عند أوّل مرّة؟</summary>
-          <div class="ans"><p>لأنّ النسخة غير موقّعة بشهادة Apple‏ Developer، فيَعُدّها macOS تطبيقًا مجهول المصدر وينقله إلى سلّة المهملات عند أوّل فتح. تثبيت «مشهد» عبر Homebrew يتجاوز ذلك تلقائيًّا، وهو المسار الموصى به على ماك. <a href="download.html">طريقة التثبيت على ماك ←</a></p></div>
-        </details>
-
-        <details class="qa">
           <summary>هل هناك تحديث تلقائيّ؟</summary>
           <div class="ans"><p>نعم على ويندوز وعلى نسخة ‎<code>AppImage</code>‎ في لينكس: يظهر شريط داخل التطبيق يعرض إعادة التشغيل للتحديث. على ماك يُعلمك التطبيق بالإصدار الجديد وتحدّثه بأمر <code>brew upgrade mashhad</code>، وعلى حزمة ‎<code>.deb</code>‎ تُثبَّت النسخة الأحدث يدويًّا.</p></div>
         </details>
@@ -452,11 +439,6 @@
         },
         {
           "@type": "Question",
-          "name": "لماذا يمنع macOS فتح التطبيق عند أوّل مرّة؟",
-          "acceptedAnswer": { "@type": "Answer", "text": "لأنّ النسخة غير موقّعة بشهادة Apple‏ Developer، فيَعُدّها macOS تطبيقًا مجهول المصدر وينقله إلى سلّة المهملات عند أوّل فتح. تثبيت «مشهد» عبر Homebrew يتجاوز ذلك تلقائيًّا، وهو المسار الموصى به على ماك." }
-        },
-        {
-          "@type": "Question",
           "name": "هل هناك تحديث تلقائيّ؟",
           "acceptedAnswer": { "@type": "Answer", "text": "نعم على ويندوز وعلى نسخة AppImage في لينكس: يظهر شريط داخل التطبيق يعرض إعادة التشغيل للتحديث. على ماك يُعلمك التطبيق بالإصدار الجديد وتحدّثه بأمر brew upgrade mashhad، وعلى حزمة ‎.deb‎ تُثبَّت النسخة الأحدث يدويًّا." }
         }
@@ -496,22 +478,30 @@
   // install, which makes brew the only macOS path that works untouched — so promote it
   // above the button and demote the .dmg to a secondary action.
   if(os === "mac"){
+    // Homebrew is the ONLY route offered here: the .dmg button is removed, not demoted.
+    // A direct .dmg is quarantined and blocked on first launch, and recovering from that
+    // needs a terminal command — so putting the button on the landing page mostly
+    // produces users with a trashed app. The cask strips quarantine on install, so brew
+    // is the one path that works untouched. The .dmg is still on download.html for
+    // anyone who wants it, with the xattr step spelled out.
     var brew = document.getElementById("heroBrew");
     var heroCta = document.querySelector(".hero .cta");
     if(brew){
       brew.hidden = false;
       var brewLb = brew.querySelector(".brew-lb");
-      if(brewLb){ brewLb.textContent = "ثبّته وحدّثه عبر Homebrew — الطريقة الموصى بها:"; }
+      if(brewLb){ brewLb.textContent = "ثبّته وحدّثه عبر Homebrew:"; }
       if(heroCta && heroCta.parentNode){ heroCta.parentNode.insertBefore(brew, heroCta); }
     }
     var cmd = document.getElementById("brewCmd");
     if(cmd){ cmd.textContent = MASHHAD.BREW; }
-    var heroBtn = document.getElementById("heroDownload");
-    if(heroBtn){ heroBtn.classList.remove("btn-gold"); heroBtn.classList.add("btn-ghost"); }
-    var note = document.getElementById("macDmgNote");
-    if(note){ note.hidden = false; }
+    // display:none, not .hidden — `.cta{display:flex}` is an author rule and beats the
+    // UA's [hidden]{display:none} at equal specificity, so setting .hidden does nothing
+    // here. (#heroBrew can use .hidden because .brewbox sets no display.)
+    if(heroCta){ heroCta.style.display = "none"; }
+    var bandCta = document.querySelector(".cta-band .cta");
+    if(bandCta){ bandCta.style.display = "none"; }   // the band's mini-link still links out
     var line = document.getElementById("bandOsLine");
-    if(line){ line.textContent = "على ماك: ثبّته عبر Homebrew (موصى به). تنزيل ‎.dmg مباشرة يحتاج خطوة إضافية قبل أوّل فتح."; }
+    if(line){ line.textContent = "على ماك: ثبّته وحدّثه عبر Homebrew بأمرٍ واحد."; }
   }
 
   // copy brew command

@@ -231,8 +231,8 @@ assets, so updates need no embedded credentials and the source stays closed.
 
 | Platform | How users get updates |
 |---|---|
-| **Windows** (NSIS) | In-app auto-update — a banner offers **restart to update** |
-| **Linux** AppImage | In-app auto-update (when run as a real AppImage) |
+| **Windows** (NSIS) | In-app update — a banner offers **تحديث الآن**, downloads on click, then **restart to update**. Nothing downloads unprompted (`autoDownload` is off). |
+| **Linux** AppImage | Same as Windows, when run as a real AppImage |
 | **Linux** `.deb` | Reinstall the newer package (no in-app updater) |
 | **macOS** | In-app banner announces the version; installs via `brew upgrade mashhad` or the `.dmg` link. Squirrel.Mac won't apply unsigned updates, so it can't self-install. |
 
@@ -243,25 +243,62 @@ uploads each build there directly. macOS also goes through the Homebrew tap in
 [`.github/workflows/site.yml`](.github/workflows/site.yml) pushes it to the public releases repo's
 `gh-pages` branch, since Pages can't serve from a private repo on a Free plan.
 
+> **The landing page deliberately offers Homebrew *only* on macOS.** When
+> [`site/index.html`](site/index.html) detects macOS it hides both `.dmg` buttons (hero and bottom
+> band) and promotes the `brew install` box in their place. The reason: the build carries no Apple
+> Developer signature, so a directly downloaded `.dmg` is quarantined, and macOS 15+ blocks it on
+> first launch and moves it straight to the Trash — with no "open anyway" escape hatch left.
+> Recovering means restoring from the Trash and running `xattr -dr com.apple.quarantine`, so a
+> prominent `.dmg` button on the landing page mostly produces users with a trashed app. The cask
+> strips the quarantine flag on install, which makes Homebrew the only macOS route that works
+> untouched. The `.dmg` is still available on [`site/download.html`](site/download.html), where the
+> `xattr` step is spelled out next to it. **Delete this special-casing once the app is signed +
+> notarized** — at that point the `.dmg` is a perfectly good primary route again.
+
 📄 **Full setup + per-release runbook: [`docs/distribution-setup.html`](docs/distribution-setup.html)**
 (open in a browser) — the one-time setup (push the source to GitHub, add the `RELEASES_TOKEN`
 secret, push the Homebrew tap, turn on Pages) and how to cut each release.
 
 **Releasing (quick reference):**
 ```bash
-# bump the version in package.json and site/release.js, then (after the release is
-# published) refresh `version` + both sha256s in homebrew-mashhad/Casks/mashhad.rb
-# and push that to the mashhadio/homebrew-mashhad repo. Then:
+# 1. Bump package.json only — the site bump comes after publishing (see below).
 git commit -am "release X.Y.Z"
 git tag vX.Y.Z && git push && git push --tags
+
+# 2. Review the draft release in mashhadio/mashhad-releases: five installers
+#    (.exe, both .dmg, .AppImage, .deb) plus latest.yml / latest-mac.yml /
+#    latest-linux.yml. Then PUBLISH it — nothing reaches users until you do.
+
+# 3. Refresh the cask from the PUBLISHED assets, and verify against the real bytes
+#    rather than a precomputed digest — a wrong hash breaks install for everyone.
+shasum -a 256 Mashhad-X.Y.Z-arm64.dmg Mashhad-X.Y.Z-x64.dmg
+#    Set `version` + both sha256s in homebrew-mashhad/Casks/mashhad.rb, then copy the
+#    file into a checkout of mashhadio/homebrew-mashhad and push it FROM THERE —
+#    homebrew-mashhad/ in this repo is a mirror, committing here changes nothing.
+
+# 4. Bump every site version string (below) and push — that deploys mashhad.io.
 ```
 
-> **Version strings live in five places.** `package.json` and `site/release.js` drive the
-> build and the download links; the other three are static text that no script rewrites —
+> **Bump the site *after* publishing, not before.** Any push touching `site/**` deploys
+> mashhad.io immediately via [`site.yml`](.github/workflows/site.yml). Bumping the version in
+> the same commit as the tag therefore puts download links for an unpublished release on the
+> live site, where they 404 for the whole build-and-review window.
+
+> **Updater changes only take effect one release later.** The code that decides how an update
+> behaves is the code in the version the user is *running*, not the one being downloaded. An
+> `src/main/updater.js` fix shipped in X.Y.Z does nothing for users on X.Y.(Z−1) — it first
+> applies when they update *from* X.Y.Z to whatever comes next. Budget two releases to verify
+> any change to the update flow.
+
+> **Version strings live in six places.** `package.json` and `site/release.js` drive the build
+> and the download links; the other four are static text that no script rewrites —
 > `softwareVersion` in the JSON-LD block at the bottom of [`site/index.html`](site/index.html),
-> and the `Current version:` line in both [`site/llms.txt`](site/llms.txt) and
-> [`site/llms-full.txt`](site/llms-full.txt). Grep the old number before tagging:
-> `grep -rn "X\.Y\.Z" package.json site/`
+> the `Current version:` line in both [`site/llms.txt`](site/llms.txt) and
+> [`site/llms-full.txt`](site/llms-full.txt), and the `verLabel` fallback in
+> [`site/download.html`](site/download.html) (JS overwrites it at runtime, so it only shows
+> before hydration — but it still goes stale). The cask is a seventh, bumped separately in
+> step 3. Grep the old number before tagging:
+> `grep -rn "X\.Y\.Z" package.json site/ homebrew-mashhad/`
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds Windows, Linux, and both
 macOS architectures on native runners and uploads them to a **draft** release. Review it, publish
 it, then update the cask's `version` + both `sha256` hashes. To build one platform by hand

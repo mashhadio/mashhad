@@ -130,12 +130,18 @@
   </ol>
 
   <h2>Releasing a new version</h2>
-  <p>Bump the version in <strong>two</strong> files first so the tag, <code>latest.yml</code>, and the download
-    page match: <code>package.json</code> and <code>site/release.js</code> (<code>VERSION</code>). The Homebrew
-    cask is bumped <em>after</em> publishing — it needs the sha256 of the built <code>.dmg</code> files, which
-    don't exist yet.</p>
+  <p>Bump <strong><code>package.json</code> only</strong>, then tag. Everything else — the site version
+    strings and the Homebrew cask — is bumped <em>after</em> the release is published.</p>
   <pre><code>git commit -am "release 1.0.1"
 git tag v1.0.1 &amp;&amp; git push &amp;&amp; git push --tags</code></pre>
+  <div class="note warn">
+    <p><strong>Don't bump <code>site/</code> in the same commit as the tag.</strong> Any push touching
+      <code>site/**</code> deploys mashhad.io immediately, so bumping <code>site/release.js</code> here puts
+      download links for a release that doesn't exist yet on the live site — they <code>404</code> for the
+      whole build-and-review window, which is easily half an hour. Bump the site in step 5 below, once the
+      assets are actually downloadable. (The cask has to wait too, for a different reason: it needs the
+      sha256 of the built <code>.dmg</code> files, which don't exist until the build finishes.)</p>
+  </div>
   <p>That's the whole build step. The <code>Release</code> workflow fans out across four jobs —
     <code>ubuntu-latest</code>, <code>windows-latest</code>, and <strong>both</strong> macOS builds on
     <code>macos-14</code> — and uploads every installer to a <strong>draft</strong> release in
