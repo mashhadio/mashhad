@@ -4,7 +4,7 @@
    Used by index.html and download.html.
    ========================================================================== */
 (function(){
-  var VERSION = "1.0.0";
+  var VERSION = "1.0.1";
 
   // GitHub account that owns the PUBLIC `mashhad-releases` + `homebrew-mashhad`
   // repos. Change this one line if the account changes — everything below
