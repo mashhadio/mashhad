@@ -11,22 +11,55 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Subset to build, comma-separated (linux, windows, mac-arm64, mac-x64). Empty = all.'
+        required: false
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
+  # Picks which platforms the build matrix covers. A tag push always builds all
+  # four; a manual run can narrow it, which matters because macOS minutes bill at
+  # 10x on a private repo — re-running one failed platform shouldn't cost a full
+  # four-platform rebuild.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          SELECTED: ${{ github.event.inputs.platforms }}
+        run: |
+          set -euo pipefail
+          ALL='[{"name":"linux","os":"ubuntu-latest","script":"release:linux"},
+                {"name":"windows","os":"windows-latest","script":"release:win"},
+                {"name":"mac-arm64","os":"macos-14","script":"release:mac:arm64"},
+                {"name":"mac-x64","os":"macos-13","script":"release:mac:x64"}]'
+          if [ -z "${SELECTED:-}" ]; then
+            INCLUDE=$(echo "$ALL" | jq -c '.')
+          else
+            INCLUDE=$(echo "$ALL" | jq -c --arg sel "$SELECTED" \
+              '($sel | split(",") | map(gsub("^\\s+|\\s+$";""))) as $want
+               | [ .[] | select(.name as $n | $want | index($n)) ]')
+            if [ "$(echo "$INCLUDE" | jq 'length')" -eq 0 ]; then
+              echo "No platform matched '$SELECTED'. Valid: linux, windows, mac-arm64, mac-x64." >&2
+              exit 1
+            fi
+          fi
+          echo "Building: $(echo "$INCLUDE" | jq -c '[.[].name]')"
+          echo "matrix={\"include\":$INCLUDE}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: setup
     name: build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false   # one platform failing shouldn't discard the others
-      matrix:
-        include:
-          - { name: linux,     os: ubuntu-latest,  script: 'release:linux' }
-          - { name: windows,   os: windows-latest, script: 'release:win' }
-          - { name: mac-arm64, os: macos-14,       script: 'release:mac:arm64' }  # Apple Silicon
-          - { name: mac-x64,   os: macos-13,       script: 'release:mac:x64' }    # Intel
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v4
