@@ -1,7 +1,7 @@
 {
   "name": "mashhad",
   "productName": "مشهد",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "مشهد — مسجّل شاشة مع تكبير سلس يتتبّع المؤشر وتنقية لضوضاء الميكروفون",
   "main": "src/main/main.js",
   "homepage": "https://mashhad.io",
