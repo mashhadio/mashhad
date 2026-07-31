@@ -167,7 +167,8 @@ arch-matched `ffmpeg-static` binary before each — see [`scripts/ffmpeg-arch.js
 
 > **Why only macOS keeps an arch suffix.** Artifact names carry no version — the release tag is
 > already in the download URL — so they stay `Mashhad.exe` / `Mashhad.AppImage` / `Mashhad.deb`
-> (renamed in 1.0.4; before that they were `Mashhad-<version>-<arch>.<ext>`). macOS is the
+> (first published this way in 1.0.5; 1.0.2 and earlier shipped `Mashhad-<version>-<arch>.<ext>`,
+> so a cask pointed at those releases must use the old pattern). macOS is the
 > exception: the `arm64` and `x64` jobs upload into the **same** release, so a bare `Mashhad.dmg`
 > from one would overwrite the other and half the users would silently get the wrong architecture.
 > Hence `build.mac.artifactName` overrides the default with `Mashhad-${arch}.${ext}`. Four places
@@ -272,23 +273,38 @@ secret, push the Homebrew tap, turn on Pages) and how to cut each release.
 
 **Releasing (quick reference):**
 ```bash
-# 1. Bump package.json only — the site bump comes after publishing (see below).
+# 1. Bump package.json ONLY — the site bump comes after publishing (see below).
+#    Check the diff before committing: it must be one line. `npm version` has been
+#    seen to land alongside an editor save that dropped scripts/devDependencies/build,
+#    which fails every job at `Missing script: "release:*"` before the build starts.
+npm version X.Y.Z --no-git-tag-version
+git diff package.json                  # expect: only "version" changed
 git commit -am "release X.Y.Z"
 git tag vX.Y.Z && git push && git push --tags
 
-# 2. Review the draft release in mashhadio/mashhad-releases: five installers
-#    (.exe, both .dmg, .AppImage, .deb) plus latest.yml / latest-mac.yml /
-#    latest-linux.yml. Then PUBLISH it — nothing reaches users until you do.
+# 2. Review the draft release in mashhadio/mashhad-releases: 15 assets — five
+#    installers (Mashhad.exe, Mashhad-arm64.dmg, Mashhad-x64.dmg, Mashhad.AppImage,
+#    Mashhad.deb), their blockmaps, the two mac .zips, and latest.yml /
+#    latest-mac.yml / latest-linux.yml. FEWER than 15 means the two macOS jobs
+#    collided — check build.mac.artifactName still carries ${arch}.
+#    Then PUBLISH it. A draft is invisible to the update feed: releases/latest/
+#    download/… resolves only to published releases, so nothing reaches users.
 
-# 3. Refresh the cask from the PUBLISHED assets, and verify against the real bytes
+# 3. Refresh the cask from the PUBLISHED assets. Verify against the real bytes
 #    rather than a precomputed digest — a wrong hash breaks install for everyone.
-shasum -a 256 Mashhad-X.Y.Z-arm64.dmg Mashhad-X.Y.Z-x64.dmg
+shasum -a 256 Mashhad-arm64.dmg Mashhad-x64.dmg
 #    Set `version` + both sha256s in homebrew-mashhad/Casks/mashhad.rb, then copy the
 #    file into a checkout of mashhadio/homebrew-mashhad and push it FROM THERE —
 #    homebrew-mashhad/ in this repo is a mirror, committing here changes nothing.
 
 # 4. Bump every site version string (below) and push — that deploys mashhad.io.
 ```
+
+> **Publishing the GitHub release does not update Homebrew.** They are two separate
+> switches. Until step 3 lands, `brew upgrade mashhad` reports *"the latest version is
+> already installed"* — correctly, because the cask still names the old version. The
+> in-app macOS banner tells users to run exactly that command, so a gap here means the
+> banner sends them to a no-op. Do step 3 promptly after publishing.
 
 > **Bump the site *after* publishing, not before.** Any push touching `site/**` deploys
 > mashhad.io immediately via [`site.yml`](.github/workflows/site.yml). Bumping the version in
@@ -300,6 +316,16 @@ shasum -a 256 Mashhad-X.Y.Z-arm64.dmg Mashhad-X.Y.Z-x64.dmg
 > `src/main/updater.js` fix shipped in X.Y.Z does nothing for users on X.Y.(Z−1) — it first
 > applies when they update *from* X.Y.Z to whatever comes next. Budget two releases to verify
 > any change to the update flow.
+
+> **Verifying the update path end-to-end.** Because of the rule above, you cannot test an
+> updater change with the release that contains it. The sequence is: publish X.Y.Z → install
+> it *manually* (`brew upgrade mashhad`, or the `.dmg`) → cut a throwaway X.Y.Z+1 and publish
+> it → fully quit the app (⌘Q; closing the window is not enough, the check runs once at
+> startup) → relaunch. The banner should name X.Y.Z+1. On macOS it is notify-only by design —
+> unsigned builds cannot self-install — so it offers the `brew` command and a `.dmg` link
+> rather than restart-to-update. If something looks wrong, run the binary directly and the
+> main process prints its diagnostics: `/Applications/Mashhad.app/Contents/MacOS/Mashhad`,
+> then look for lines starting with `[update]`.
 
 > **Version strings live in six places.** `package.json` and `site/release.js` drive the build
 > and the download links; the other four are static text that no script rewrites —
