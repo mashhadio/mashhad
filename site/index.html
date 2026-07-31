@@ -51,6 +51,14 @@
           </a>
         </div>
 
+        <!-- mac only: the direct .dmg needs a manual step, so say so next to the button.
+             Revealed by the os === "mac" branch below, which also moves #heroBrew above
+             the .cta so Homebrew reads as the primary route. -->
+        <div class="warn-box" id="macDmgNote" hidden>
+          <span class="tb-ic" aria-hidden="true">⚠️</span>
+          <span><b>تنزيل ‎.dmg مباشرة؟</b> النسخة غير موقّعة بشهادة Apple، لذا يمنعها macOS عند أوّل فتح وينقلها إلى سلّة المهملات. تثبيت Homebrew أعلاه يتجاوز ذلك تلقائيًّا. <a href="download.html">تفاصيل الطريقة اليدويّة ←</a></span>
+        </div>
+
         <!-- mac: brew (shown by JS on macOS) -->
         <div class="brewbox" id="heroBrew" hidden>
           <span class="brew-lb">أو ثبّته وحدّثه عبر Homebrew:</span>
@@ -253,14 +261,29 @@
   wire("heroDownload","heroBtnLabel","heroFileRow","heroFileName","heroFileSize");
   wire("bandDownload","bandBtnLabel","bandFileRow","bandFileName","bandFileSize");
 
-  // macOS: reveal brew option
+  // macOS: Homebrew is the primary route, not a footnote. The build carries no Apple
+  // Developer signature, so a directly downloaded .dmg is quarantined and macOS 15+
+  // blocks it on first launch and moves it straight to the Trash ("Malware Blocked"),
+  // with no open-anyway escape hatch left. The cask strips the quarantine flag on
+  // install, which makes brew the only macOS path that works untouched — so promote it
+  // above the button and demote the .dmg to a secondary action.
   if(os === "mac"){
     var brew = document.getElementById("heroBrew");
-    if(brew){ brew.hidden = false; }
+    var heroCta = document.querySelector(".hero .cta");
+    if(brew){
+      brew.hidden = false;
+      var brewLb = brew.querySelector(".brew-lb");
+      if(brewLb){ brewLb.textContent = "ثبّته وحدّثه عبر Homebrew — الطريقة الموصى بها:"; }
+      if(heroCta && heroCta.parentNode){ heroCta.parentNode.insertBefore(brew, heroCta); }
+    }
     var cmd = document.getElementById("brewCmd");
     if(cmd){ cmd.textContent = MASHHAD.BREW; }
+    var heroBtn = document.getElementById("heroDownload");
+    if(heroBtn){ heroBtn.classList.remove("btn-gold"); heroBtn.classList.add("btn-ghost"); }
+    var note = document.getElementById("macDmgNote");
+    if(note){ note.hidden = false; }
     var line = document.getElementById("bandOsLine");
-    if(line){ line.textContent = "على ماك: نزّل ملف ‎.dmg مباشرة أو ثبّته عبر Homebrew، الطريقتان مدعومتان."; }
+    if(line){ line.textContent = "على ماك: ثبّته عبر Homebrew (موصى به). تنزيل ‎.dmg مباشرة يحتاج خطوة إضافية قبل أوّل فتح."; }
   }
 
   // copy brew command

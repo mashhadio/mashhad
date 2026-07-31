@@ -42,6 +42,12 @@
 
   // The .dmg is unsigned (no Apple Developer certificate), so Gatekeeper quarantines
   // a direct download. Homebrew strips that automatically; a manual install needs this.
+  //
+  // Ordering matters on macOS 15+: this must run BEFORE the first launch. An unsigned,
+  // quarantined app that gets double-clicked first is blocked and moved to the Trash
+  // outright ("Malware Blocked and Moved to Trash") — there is no "open anyway" escape
+  // hatch left, so the user has to restore it from the Trash and then run this.
+  //
   // The bundle on disk is Mashhad.app — only its display name (CFBundleName) is مشهد,
   // so the Arabic name will not match a path here.
   var MAC_QUARANTINE = 'xattr -dr com.apple.quarantine /Applications/Mashhad.app';

@@ -52,16 +52,18 @@
 
         <div class="dl" data-os="mac" id="dl-mac">
           <div class="os"><span class="glyph">🍎</span><b>ماك</b><span class="yours">نظامك</span></div>
-          <div class="meta">ثبّته بإحدى طريقتين، عبر Homebrew (موصى به، يتضمّن التحديث) أو بتنزيل ملف <code>.dmg</code> مباشرة.</div>
+          <div class="meta">الطريقة الموصى بها على ماك هي <b>Homebrew</b>: يثبّت التطبيق ويحدّثه، ويفتح من أوّل مرّة دون أيّ خطوة إضافيّة.</div>
           <div class="brew">
             <code id="mac-brew" style="white-space:pre-line">…</code>
             <button type="button" class="copy" id="mac-brew-copy">نسخ</button>
           </div>
+          <span class="sub">للتحديث لاحقًا: <code id="mac-upgrade">brew upgrade mashhad</code></span>
+
+          <span class="sub" style="margin-top:12px"><b>أو التثبيت اليدويّ (احتياطيّ):</b></span>
           <span class="fname" id="mac-name">…</span>
           <a class="btn btn-ghost" id="mac-dl" href="#" style="justify-content:center">تنزيل ‎.dmg لمعالج Apple‏ (M1/M2/M3)</a>
           <a class="btn btn-ghost" id="mac-dl-intel" href="#" style="justify-content:center">تنزيل ‎.dmg لمعالج Intel</a>
-          <span class="sub">للتحديث عبر brew: <code id="mac-upgrade">brew upgrade mashhad</code></span>
-          <span class="sub">مع التثبيت اليدويّ فقط: النسخة غير موقّعة، لذا شغّل هذا الأمر مرّة واحدة بعد نقل التطبيق إلى «التطبيقات» ليفتحه macOS <code id="mac-quarantine" style="white-space:pre-line">…</code></span>
+          <span class="sub">النسخة غير موقّعة بشهادة Apple. انقل التطبيق إلى «التطبيقات» ثمّ شغّل هذا الأمر <b>قبل فتحه لأوّل مرّة</b> <code id="mac-quarantine" style="white-space:pre-line">…</code> إن فتحته قبل تشغيل الأمر فسيمنعه macOS وينقله إلى سلّة المهملات مع رسالة «Malware Blocked» — أعِده من السلّة ثمّ شغّل الأمر.</span>
         </div>
 
         <div class="dl" data-os="linux" id="dl-linux">

@@ -202,9 +202,19 @@ brew upgrade mashhad                     # update</code></pre>
 
   <h3>macOS (manual <code>.dmg</code>)</h3>
   <p>Download the <code>arm64</code> (Apple Silicon) or <code>x64</code> (Intel) <code>.dmg</code>, drag the app
-    to Applications, then clear the quarantine flag once — the build is unsigned, so without this macOS reports
-    it as damaged:</p>
+    to Applications, then clear the quarantine flag <strong>before launching it for the first time</strong> —
+    the build is unsigned, and without this macOS refuses to open it:</p>
   <pre><code>xattr -dr com.apple.quarantine /Applications/Mashhad.app</code></pre>
+  <div class="note warn">
+    <p><strong>Run it before the first double-click, not after.</strong> On macOS 15+ the refusal is
+      terminal: the app is blocked and <em>moved to the Trash</em> on the spot, under the wording
+      <em>"Mashhad.app was not opened because it contains malware. This action did not harm your Mac."</em>
+      The Control-click-to-open bypass that used to defuse this is gone. Nothing is actually infected —
+      that dialog is what an <em>absent code signature</em> looks like on a quarantined download, not a
+      detection. (Verified: scanning the shipped 1.0.0 bundle against all 451 rules in Apple's own
+      <code>XProtect.yara</code> produces zero matches.) A user who hits it has to restore the app from
+      the Trash and then run the command above.</p>
+  </div>
   <p class="muted">The bundle on disk is <code>Mashhad.app</code> — electron-builder falls back to
     <code>executableName</code> for the filename because <code>productName</code> is non-ASCII. Only the
     <em>display</em> name (<code>CFBundleName</code>) is مشهد, so an Arabic path here matches nothing and the
@@ -219,8 +229,15 @@ brew upgrade mashhad                     # update</code></pre>
       all. The 1.0.0 <code>arm64</code> build was checked and carries one
       (<code>codesign -dv</code> → <code>Signature=adhoc</code>, <code>flags=0x20002(adhoc,linker-signed)</code>),
       applied by the linker on the arm64 runner — so no <code>afterPack</code> hook is needed. The x64 build has
-      no signature, which is fine because Intel doesn't require one. Still worth opening the <code>arm64</code>
-      <code>.dmg</code> on real Apple Silicon hardware once; the signature check is necessary but not sufficient.</li>
+      no signature at all (confirmed on the shipped 1.0.0: <code>codesign -dv</code> → <code>code object is not
+      signed at all</code>), which only means Intel will still <em>execute</em> it locally.
+      <strong>Neither of those facts helps a download.</strong> An ad-hoc/linker signature satisfies the
+      arm64 execution requirement and nothing else — it is not a Developer ID, so Gatekeeper rejects both
+      architectures identically (<code>spctl -a</code> → <code>rejected: no usable signature</code>) the moment
+      the file carries a quarantine flag. Verifying "it launches from a terminal" or "it launches after
+      <code>xattr -dr</code>" therefore proves nothing about the download path, which is the only path real
+      users take. The check that actually models a user is <code>syspolicy_check distribution Mashhad.app</code>;
+      today it returns two <em>Fatal</em> findings (not signed, no notarization ticket stapled).</li>
     <li>Versions must stay in lock-step: <code>package.json</code> version = git tag = filename = Homebrew cask
       <code>version</code> = <code>site/release.js</code> <code>VERSION</code>.</li>
     <li>Both macOS jobs write a <code>latest-mac.yml</code> and the second overwrites the first. Harmless today
