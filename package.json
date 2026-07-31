@@ -1,7 +1,7 @@
 {
   "name": "mashhad",
   "productName": "مشهد",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "مشهد — مسجّل شاشة مع تكبير سلس يتتبّع المؤشر وتنقية لضوضاء الميكروفون",
   "main": "src/main/main.js",
   "homepage": "https://mashhad.io",
@@ -47,7 +47,7 @@
     "appId": "com.abdul.mashhad",
     "productName": "مشهد",
     "executableName": "Mashhad",
-    "artifactName": "Mashhad-${version}-${arch}.${ext}",
+    "artifactName": "Mashhad.${ext}",
     "files": [
       "src/**/*",
       "assets/**/*",
@@ -86,6 +86,7 @@
       "icon": "build/icon.png"
     },
     "mac": {
+      "artifactName": "Mashhad-${arch}.${ext}",
       "target": [
         "dmg",
         "zip"

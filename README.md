@@ -154,9 +154,9 @@ with a runner per OS).
 
 | OS | Build command | Produces (in `dist/`) |
 |---|---|---|
-| Windows | `npm run dist:win` | `Mashhad-<version>-<arch>.exe` (NSIS installer) |
-| macOS | `npm run dist:mac` | `Mashhad-<version>-<arch>.dmg` **and** `.zip` |
-| Linux | `npm run dist:linux` | `Mashhad-<version>-<arch>.AppImage` **and** `.deb` |
+| Windows | `npm run dist:win` | `Mashhad.exe` (NSIS installer) |
+| macOS | `npm run dist:mac` | `Mashhad-<arch>.dmg` **and** `.zip` |
+| Linux | `npm run dist:linux` | `Mashhad.AppImage` **and** `.deb` |
 
 `npm run dist` (no suffix) builds the default target for whatever OS you're currently on.
 On macOS, `npm run dist:mac:all` builds **both** architectures (arm64 then x64), swapping in the
@@ -164,6 +164,17 @@ arch-matched `ffmpeg-static` binary before each — see [`scripts/ffmpeg-arch.js
 
 > First time on a machine? Run `npm install` before any `dist:*` command so
 > electron-builder and the native deps (`ffmpeg-static`, `uiohook-napi`) are present.
+
+> **Why only macOS keeps an arch suffix.** Artifact names carry no version — the release tag is
+> already in the download URL — so they stay `Mashhad.exe` / `Mashhad.AppImage` / `Mashhad.deb`
+> (renamed in 1.0.4; before that they were `Mashhad-<version>-<arch>.<ext>`). macOS is the
+> exception: the `arm64` and `x64` jobs upload into the **same** release, so a bare `Mashhad.dmg`
+> from one would overwrite the other and half the users would silently get the wrong architecture.
+> Hence `build.mac.artifactName` overrides the default with `Mashhad-${arch}.${ext}`. Four places
+> must agree on this: `build.artifactName` and `build.mac.artifactName` in
+> [`package.json`](package.json), the `url` in the [cask](homebrew-mashhad/Casks/mashhad.rb),
+> `macDownloadUrl` in [`src/main/updater.js`](src/main/updater.js), and `FILES` in
+> [`site/release.js`](site/release.js).
 
 > **Windows build gotcha — "Cannot create symbolic link … a required privilege is not
 > held by the client".** electron-builder unpacks its `winCodeSign` helper, which contains
@@ -175,7 +186,7 @@ arch-matched `ffmpeg-static` binary before each — see [`scripts/ffmpeg-arch.js
 
 ### Windows — install
 
-1. Double-click **`Mashhad-<version>-x64.exe`**.
+1. Double-click **`Mashhad.exe`**.
 2. Because the installer isn't code-signed, Windows SmartScreen may show a blue
    *"Windows protected your PC"* dialog → click **More info → Run anyway**.
 3. The NSIS installer lets you choose the install folder and creates Start-menu / desktop
@@ -185,7 +196,7 @@ _No extra permissions needed on Windows._
 
 ### macOS — install
 
-1. Open **`Mashhad-<version>-<arch>.dmg`** and drag **Mashhad** into **Applications**.
+1. Open **`Mashhad-<arch>.dmg`** and drag **Mashhad** into **Applications**.
 2. First launch: because the app isn't notarized, macOS Gatekeeper blocks it. Either
    **right-click the app → Open → Open**, or go to **System Settings → Privacy & Security**
    and click **Open Anyway**.
@@ -206,14 +217,14 @@ Two artifacts are produced; pick whichever suits the target distro:
 
 **AppImage (works on most distros, no install needed):**
 ```bash
-chmod +x Mashhad-<version>-x86_64.AppImage
-./Mashhad-<version>-x86_64.AppImage
+chmod +x Mashhad.AppImage
+./Mashhad.AppImage
 ```
 
 **Debian / Ubuntu (`.deb`):**
 ```bash
-sudo apt install ./Mashhad-<version>-amd64.deb   # resolves dependencies
-# or:  sudo dpkg -i Mashhad-<version>-amd64.deb && sudo apt -f install
+sudo apt install ./Mashhad.deb   # resolves dependencies
+# or:  sudo dpkg -i Mashhad.deb && sudo apt -f install
 ```
 Then launch **Mashhad** from your applications menu (or run `Mashhad` in a terminal).
 

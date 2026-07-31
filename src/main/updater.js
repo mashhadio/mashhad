@@ -111,7 +111,12 @@ async function checkMacUpdate(send) {
 
   // An x64 build running under Rosetta should be offered the native arm64 one.
   const arch = process.arch === 'x64' && app.runningUnderARM64Translation ? 'arm64' : process.arch;
-  macDownloadUrl = assetUrl(target, `Mashhad-${version}-${arch}.dmg`, `v${version}`);
+  // Must match build.mac.artifactName in package.json. Renamed in 1.0.4 (the version
+  // dropped out — it is already in the tag this URL is built from). Clients on 1.0.3
+  // and earlier still ask for the old Mashhad-<version>-<arch>.dmg, so their banner's
+  // .dmg button 404s against a 1.0.4+ release; Homebrew is unaffected and is the
+  // route this banner recommends first.
+  macDownloadUrl = assetUrl(target, `Mashhad-${arch}.dmg`, `v${version}`);
   send({ state: 'manual', version, brew: BREW_UPGRADE });
 }
 

@@ -157,7 +157,7 @@ git tag v1.0.1 &amp;&amp; git push &amp;&amp; git push --tags</code></pre>
     <li><strong>Publish it.</strong> Nothing updates for users until the draft is published — that is the
       switch that flips the feed.</li>
     <li><strong>Update the cask.</strong> Download both <code>.dmg</code> files from the release, then:
-      <pre><code>shasum -a 256 Mashhad-&lt;version&gt;-arm64.dmg Mashhad-&lt;version&gt;-x64.dmg</code></pre>
+      <pre><code>shasum -a 256 Mashhad-arm64.dmg Mashhad-x64.dmg</code></pre>
       Set <code>version</code> and both <code>sha256 arm:</code> / <code>intel:</code> hashes in
       <code>Casks/mashhad.rb</code>, then push to <code>mashhadio/homebrew-mashhad</code>.
       <span class="muted"><strong>Careful:</strong> <code>homebrew-mashhad/</code> in this repo is a
@@ -184,11 +184,11 @@ git tag v1.0.1 &amp;&amp; git push &amp;&amp; git push --tags</code></pre>
   <h2>How users install &amp; update</h2>
 
   <h3>Windows</h3>
-  <p>Download and run <code>Mashhad-&lt;version&gt;-x64.exe</code>. Updates apply automatically in-app
+  <p>Download and run <code>Mashhad.exe</code>. Updates apply automatically in-app
     (banner → <em>Restart to update</em>).</p>
 
   <h3>Linux</h3>
-  <pre><code>chmod +x Mashhad-&lt;version&gt;-x86_64.AppImage &amp;&amp; ./Mashhad-&lt;version&gt;-x86_64.AppImage</code></pre>
+  <pre><code>chmod +x Mashhad.AppImage &amp;&amp; ./Mashhad.AppImage</code></pre>
   <p>AppImage updates in-app. For the <code>.deb</code>, reinstall the newer package.</p>
 
   <h3>macOS (Homebrew — recommended)</h3>
