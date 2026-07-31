@@ -9,26 +9,31 @@ Homebrew **tap** for [مشهد (Mashhad)](https://github.com/mashhadio/mashhad-r
 ## Install (users)
 
 ```sh
-brew tap mashhadio/mashhad
-brew trust --tap mashhadio/mashhad
-brew install mashhad
+brew install mashhadio/mashhad/mashhad
 ```
 
-All three lines are needed on Homebrew 6+, and only once:
+That's the whole thing — no `brew tap`, no `brew trust`, no `--cask`. The
+fully-qualified `owner/tap/cask` path makes Homebrew 6 auto-tap the repo *and*
+record trust for this cask in `~/.homebrew/trust.json`.
 
-- `tap` — Homebrew 6 dropped auto-tapping, so `brew install mashhadio/mashhad/mashhad`
-  on its own fails with *"This command requires the tap"*.
-- `trust` — Homebrew 6 refuses to load a cask from any third-party tap until it's
-  trusted: *"Refusing to load cask … from untrusted tap"*. The decision is recorded
-  in `~/.homebrew/trust.json`. This applies to every tap outside `Homebrew/*`, not
-  just this one.
-- `install` — once tapped, the bare token resolves to the cask, so no `--cask` flag.
+**Don't shorten it to `brew tap … && brew install mashhad`.** Tapping explicitly
+leaves the tap present-but-untrusted, and the short name is then rejected:
+
+```
+Error: Refusing to load cask mashhadio/mashhad/mashhad from untrusted tap mashhadio/mashhad.
+```
+
+Recovering from that needs a `brew trust` call, so the shorter-looking form is
+actually the three-step one.
 
 ## Update (users)
 
 ```sh
 brew upgrade mashhad
 ```
+
+The short name works here because the install above already registered and
+trusted the tap.
 
 Homebrew compares the installed version against `version` in `Casks/mashhad.rb`;
 when you publish a newer cask, `brew upgrade` pulls the new `.dmg`.
