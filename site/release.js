@@ -40,7 +40,9 @@
 
   // The .dmg is unsigned (no Apple Developer certificate), so Gatekeeper quarantines
   // a direct download. Homebrew strips that automatically; a manual install needs this.
-  var MAC_QUARANTINE = 'xattr -dr com.apple.quarantine "/Applications/مشهد.app"';
+  // The bundle on disk is Mashhad.app — only its display name (CFBundleName) is مشهد,
+  // so the Arabic name will not match a path here.
+  var MAC_QUARANTINE = 'xattr -dr com.apple.quarantine /Applications/Mashhad.app';
 
   function detectOS(){
     var d = (navigator.userAgentData && navigator.userAgentData.platform) || "";

@@ -22,7 +22,11 @@ cask "mashhad" do
   # prints a warning on every `brew` invocation that touches the tap.
   depends_on macos: :catalina
 
-  app "مشهد.app"
+  # The bundle inside the .dmg is "Mashhad.app" (electron-builder falls back to
+  # `executableName` for the bundle filename because productName is non-ASCII).
+  # Its CFBundleName is still "مشهد", which is what Finder and the menu bar show.
+  # This must be the on-disk filename or Homebrew fails with "App source ... is not there".
+  app "Mashhad.app"
 
   # The build is unsigned (no Apple Developer certificate yet), so macOS quarantines
   # it and shows "app is damaged / can't be opened". Strip the quarantine attribute
@@ -30,7 +34,7 @@ cask "mashhad" do
   # notarized.
   postflight do
     system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/مشهد.app"],
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Mashhad.app"],
                    sudo: false
   end
 
