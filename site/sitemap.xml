@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Bump <lastmod> when a page's content actually changes; a date that moves on
+     every deploy is noise and Google learns to ignore it. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url>
+    <loc>https://mashhad.io/</loc>
+    <lastmod>2026-07-31</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://mashhad.io/og.png</image:loc>
+      <image:title>مشهد — برنامج تسجيل الشاشة بتكبير سلس يتتبّع المؤشر</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://mashhad.io/download.html</loc>
+    <lastmod>2026-07-31</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+</urlset>

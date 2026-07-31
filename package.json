@@ -26,7 +26,8 @@
     "release:mac": "npm run release:mac:arm64 && npm run release:mac:x64",
     "icons": "node scripts/make-icons.js",
     "brand": "node scripts/make-brand.js",
-    "logo": "node scripts/make-logo.js"
+    "logo": "node scripts/make-logo.js",
+    "og": "node scripts/make-og.js"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",

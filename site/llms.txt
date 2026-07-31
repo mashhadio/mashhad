@@ -1,0 +1,59 @@
+# Mashhad (مشهد)
+
+> Mashhad is a free, Arabic-native screen recording app (تسجيل الشاشة) for Windows, macOS, and Linux. It records your screen while tracking your cursor and clicks, then adds smooth cursor-following zoom in a built-in studio editor — plus microphone noise cleanup, a webcam bubble with background blur, and multi-format export. For complete documentation in a single file, see [Full Documentation](https://mashhad.io/llms-full.txt).
+
+Mashhad is a desktop application, not a SaaS or a browser extension. Recording, editing, and exporting all happen locally on the user's machine — nothing is uploaded, and no account is required. The entire interface is Arabic and right-to-left, designed natively rather than translated. It is free to use, with in-app auto-update.
+
+- Website: https://mashhad.io
+- Download: https://mashhad.io/download.html
+- Releases: https://github.com/mashhadio/mashhad-releases
+- Support: support@mashhad.io
+- Current version: 1.0.2
+
+## Product
+
+- [Homepage](https://mashhad.io): Mashhad's main landing page — the Arabic screen recorder with smooth cursor-following zoom, noise cleanup, and a studio editor.
+- [Download](https://mashhad.io/download.html): Every install route per OS — `.exe` installer for Windows, Homebrew or `.dmg` for macOS (Apple Silicon and Intel), AppImage or `.deb` for Linux. The visitor's OS is highlighted automatically.
+- [Features](https://mashhad.io/#features): The complete capability list, split between screen recording tools and studio editing tools.
+- [In-app previews](https://mashhad.io/#shots): Previews of the real Mashhad interface — the recording screen with its options, and the studio with its timeline and smooth zoom.
+- [FAQ](https://mashhad.io/#faq): Answers on pricing, supported operating systems, how the cursor zoom works, export formats, privacy, the macOS Gatekeeper step, and auto-update.
+
+## Screen recording (تسجيل الشاشة)
+
+- **Smooth cursor-following zoom**: Cursor movement and clicks are logged globally during the recording. In the studio, eased zoom moments are generated around the clicks and the virtual camera pans toward the cursor instead of jumping. Works on full-screen recordings; single-window recordings keep the zoom centered.
+- **Capture sources**: A whole screen, a single window, the camera alone, or a hand-drawn region of the screen.
+- **Screen recording with audio**: Microphone capture with four levels of noise reduction (off, light, medium, strong) and four levels of room-echo reduction, previewable before export.
+- **Webcam with blurred background**: A draggable, resizable camera bubble with live background blur, composited into the final video.
+- **Live scene switching**: F1 (screen), F2 (camera), F3 (both) switch the scene mid-recording without stopping.
+- **Platform aspect ratios**: Original, YouTube 16:9 (1920×1080), Shorts/Reels 9:16 (1080×1920), Square 1:1 (1080×1080), Portrait 4:5 (1080×1350).
+- **Frame rate and quality**: 30 or 60 fps, and three quality tiers (performance, balanced, high).
+- **Global shortcut**: Ctrl+Shift+R (⌘⇧R on macOS) starts and stops recording while the app is in the background.
+
+## Studio (الاستوديو)
+
+- **Non-linear timeline with layers**: Multiple video and audio layers, drag to reorder, split and trim directly on the timeline, with undo/redo and project save/open.
+- **Zoom control**: Auto-zoom generated at clicks, plus manual add, resize, and clear.
+- **Automatic silence removal**: Long silent stretches are cut so a walkthrough keeps its pace.
+- **Five transitions**: Fade, crossfade, slide, wipe, and zoom — plus a plain cut.
+- **Voiceover and click effects**: Record narration over the video; four click visual styles (ring, solid pulse, double ring, spotlight) and an optional click sound.
+- **Export**: MP4 (H.264), MOV, WebM (VP9), and animated GIF, plus YouTube and editing-master presets; three quality tiers; resolutions up to 1440p.
+
+## Install
+
+- [Windows](https://mashhad.io/download.html): `.exe` NSIS installer for Windows 10/11 (64-bit), with in-app auto-update. Unsigned, so SmartScreen shows a warning — choose "More info" then "Run anyway".
+- [macOS — Homebrew (recommended)](https://mashhad.io/download.html): `brew install mashhadio/mashhad/mashhad`, then `brew upgrade mashhad` to update. The cask clears the quarantine flag, so the app opens on first launch with no extra step.
+- [macOS — manual `.dmg`](https://mashhad.io/download.html): Separate Apple Silicon and Intel builds. Unsigned, so `xattr -dr com.apple.quarantine /Applications/Mashhad.app` must run **before** the first launch, or macOS blocks the app and moves it to the Trash.
+- [Linux](https://mashhad.io/download.html): `AppImage` (x86_64, with in-app auto-update) or a `.deb` package (amd64, updated by reinstalling).
+
+## Facts
+
+- Price: free, no account, no subscription.
+- Interface language: Arabic only, fully right-to-left.
+- Privacy: recording, editing, and export run entirely on-device; no footage is uploaded. The network is used only to check for updates.
+- Recordings are saved to a `Mashhad` folder inside the user's Videos location (`~/Movies/Mashhad` on macOS, `%USERPROFILE%\Videos\Mashhad` on Windows, `~/Videos/Mashhad` on Linux).
+- macOS requires Screen Recording, Accessibility, and Input Monitoring permissions; the app must be relaunched after granting them.
+- On Linux the global cursor hook needs an X11 session — cursor tracking may not work under Wayland, though screen recording still does.
+
+## Keywords
+
+تسجيل الشاشة، برنامج تسجيل الشاشة، تسجيل شاشة الكمبيوتر، مسجل شاشة، تصوير الشاشة فيديو، تسجيل الشاشة مع الصوت، تسجيل الشاشة بالعربي، برنامج تسجيل شاشة مجاني، تسجيل الشاشة ويندوز، تسجيل الشاشة ماك، تسجيل الشاشة لينكس، تكبير سلس، تتبع المؤشر، تنقية ضوضاء الميكروفون، محرر فيديو عربي، شروحات الفيديو، تسجيل الاجتماعات، screen recording, screen recorder, Arabic screen recorder, cursor-follow zoom, smooth zoom, auto zoom, noise reduction, webcam overlay, background blur, screen capture, video tutorial recording, Screen Studio alternative.

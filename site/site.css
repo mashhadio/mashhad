@@ -194,6 +194,28 @@ section{padding:56px 0}
 .check-list .tx span{display:block;color:var(--ink-soft);font-size:13.5px;font-weight:400;margin-top:1px}
 @media(max-width:820px){.checks{grid-template-columns:1fr}}
 
+/* ===== FAQ =====
+   <details> so the answers ship in the HTML (crawlable, and matched by in-page
+   find) while staying collapsed for the reader. */
+.faq{max-width:880px;margin:0 auto}
+.qa{background:var(--card);border:1px solid var(--line);border-radius:16px;margin-bottom:12px;overflow:hidden}
+.qa[open]{border-color:var(--gold-soft);box-shadow:0 6px 18px rgba(44,62,80,.07)}
+.qa summary{list-style:none;cursor:pointer;padding:18px 22px;font-weight:700;font-size:16.5px;
+  display:flex;align-items:center;gap:12px;transition:background .12s}
+.qa summary::-webkit-details-marker{display:none}
+.qa summary:hover{background:var(--paper)}
+.qa summary::after{content:"+";margin-inline-start:auto;flex:none;font-weight:400;font-size:22px;
+  line-height:1;color:var(--gold);transition:transform .18s}
+.qa[open] summary::after{content:"−";transform:rotate(180deg)}
+.qa summary:focus-visible{outline:2px solid var(--gold);outline-offset:-2px}
+.qa .ans{padding:0 22px 18px;color:var(--ink-soft);font-size:15px;border-top:1px solid var(--line);padding-top:16px}
+.qa .ans p{margin:0 0 10px}
+.qa .ans p:last-child{margin-bottom:0}
+.qa .ans a{color:var(--gold-ink);font-weight:700;text-decoration:underline;text-underline-offset:3px}
+.qa .ans code{font-family:Consolas,ui-monospace,monospace;font-size:13px;background:var(--paper-2);
+  padding:2px 6px;border-radius:6px;direction:ltr;display:inline-block}
+@media(max-width:600px){.qa summary{font-size:15px;padding:15px 17px}.qa .ans{padding:14px 17px 16px}}
+
 /* ===== closing CTA band ===== */
 .cta-band{background:var(--paper-2);border-top:1px solid var(--line);border-bottom:1px solid var(--line);text-align:center}
 .cta-band h2{font-family:"Thmanyah Serif Display","Thmanyah Sans",serif;font-size:clamp(24px,3.2vw,34px);margin:0 0 10px;font-weight:700}

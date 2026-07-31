@@ -255,6 +255,13 @@ secret, push the Homebrew tap, turn on Pages) and how to cut each release.
 git commit -am "release X.Y.Z"
 git tag vX.Y.Z && git push && git push --tags
 ```
+
+> **Version strings live in five places.** `package.json` and `site/release.js` drive the
+> build and the download links; the other three are static text that no script rewrites —
+> `softwareVersion` in the JSON-LD block at the bottom of [`site/index.html`](site/index.html),
+> and the `Current version:` line in both [`site/llms.txt`](site/llms.txt) and
+> [`site/llms-full.txt`](site/llms-full.txt). Grep the old number before tagging:
+> `grep -rn "X\.Y\.Z" package.json site/`
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds Windows, Linux, and both
 macOS architectures on native runners and uploads them to a **draft** release. Review it, publish
 it, then update the cask's `version` + both `sha256` hashes. To build one platform by hand
