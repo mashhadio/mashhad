@@ -4,7 +4,11 @@
   "version": "1.0.0",
   "description": "مشهد — مسجّل شاشة مع تكبير سلس يتتبّع المؤشر وتنقية لضوضاء الميكروفون",
   "main": "src/main/main.js",
-  "author": "Abdul",
+  "homepage": "https://mashhad.io",
+  "author": {
+    "name": "Mashhad",
+    "email": "support@mashhad.io"
+  },
   "license": "MIT",
   "scripts": {
     "start": "electron .",
