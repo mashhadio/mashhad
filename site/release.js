@@ -18,13 +18,18 @@
   // The version is not in the filename — it is already in BASE, which is built from the
   // tag. Only macOS carries an arch suffix, because its two builds share one release and
   // would otherwise overwrite each other.
-  // Sizes are approximate — refresh them from dist/ after each real build.
+  // Sizes shown next to the download buttons. Refresh from the PUBLISHED release, not
+  // from a guess — these had drifted badly (Linux was advertised at ~100 م.ب against a
+  // real 140). One command, after publishing:
+  //   gh api repos/mashhadio/mashhad-releases/releases --jq \
+  //     '.[] | select(.tag_name=="vX.Y.Z") | .assets[] | "\(.name) \((.size/1048576)|floor)"'
+  // Measured on 1.0.6.
   var FILES = {
-    win:       { name: "Mashhad.exe",        size: "~95 م.ب",  url: BASE + "/Mashhad.exe" },
-    mac_arm64: { name: "Mashhad-arm64.dmg",  size: "~130 م.ب", url: BASE + "/Mashhad-arm64.dmg" },
+    win:       { name: "Mashhad.exe",        size: "~103 م.ب", url: BASE + "/Mashhad.exe" },
+    mac_arm64: { name: "Mashhad-arm64.dmg",  size: "~118 م.ب", url: BASE + "/Mashhad-arm64.dmg" },
     mac_x64:   { name: "Mashhad-x64.dmg",    size: "~130 م.ب", url: BASE + "/Mashhad-x64.dmg" },
-    linux:     { name: "Mashhad.AppImage",   size: "~100 م.ب", url: BASE + "/Mashhad.AppImage" },
-    deb:       { name: "Mashhad.deb",        size: "~98 م.ب",  url: BASE + "/Mashhad.deb" }
+    linux:     { name: "Mashhad.AppImage",   size: "~140 م.ب", url: BASE + "/Mashhad.AppImage" },
+    deb:       { name: "Mashhad.deb",        size: "~94 م.ب",  url: BASE + "/Mashhad.deb" }
   };
 
   var LABELS = { win: "ويندوز", mac: "ماك", linux: "لينكس" };

@@ -73,9 +73,11 @@
   <h2>How updates reach each platform</h2>
   <table>
     <tr><th>Platform</th><th>Mechanism</th><th>Notes</th></tr>
-    <tr><td><strong>Windows</strong> (NSIS <code>.exe</code>)</td><td>In-app auto-update (electron-updater)</td>
-        <td>One-click "restart to update". SmartScreen warning while unsigned.</td></tr>
-    <tr><td><strong>Linux</strong> AppImage</td><td>In-app auto-update</td>
+    <tr><td><strong>Windows</strong> (NSIS <code>.exe</code>)</td><td>In-app update (electron-updater), user-initiated</td>
+        <td>The banner offers <em>«تحديث الآن»</em>; nothing downloads until it is pressed
+        (<code>autoDownload</code> is off). Then <em>«أعد التشغيل للتحديث»</em>, which installs silently.
+        SmartScreen warning while unsigned.</td></tr>
+    <tr><td><strong>Linux</strong> AppImage</td><td>Same as Windows</td>
         <td>Works only when run as a real AppImage (the <code>APPIMAGE</code> env var is set).</td></tr>
     <tr><td><strong>Linux</strong> <code>.deb</code></td><td>None (apt / manual)</td>
         <td>The in-app updater is disabled; update via your package manager or a new <code>.deb</code>.</td></tr>
@@ -84,10 +86,16 @@
         button and a direct <code>.dmg</code> link. It can't self-install: Squirrel.Mac refuses unsigned
         updates.</td></tr>
   </table>
-  <p>On Windows and AppImage the updater checks the feed on launch, downloads in the background, and shows
-    an Arabic banner with an <strong>«أعد التشغيل للتحديث»</strong> (Restart to update) button. On macOS the
-    same banner appears but offers <strong>«نسخ أمر التحديث»</strong> / <strong>«تنزيل النسخة الجديدة»</strong>
-    instead. It is a no-op in development and on unsupported targets.</p>
+  <p>On Windows and AppImage the updater checks the feed on launch and raises an Arabic banner offering
+    <strong>«تحديث الآن»</strong>. <em>Nothing is downloaded until the user presses it</em> — the installer is
+    ~100 MB and fetching it unasked is a surprise on a metered connection. Progress then runs in the banner,
+    and <strong>«أعد التشغيل للتحديث»</strong> applies it, installing silently rather than re-running the
+    setup wizard. On macOS the same banner appears but offers <strong>«نسخ أمر التحديث»</strong> /
+    <strong>«تنزيل النسخة الجديدة»</strong> instead. It is a no-op in development and on unsupported
+    targets.</p>
+  <p class="muted">A failed update <em>check</em> is silent — an offline launch shouldn't nag. A failure
+    <em>after</em> the user pressed the button is not: the banner stays up and offers a retry, since
+    swallowing an action the user took is worse than a little noise.</p>
 
   <h2>The update feed</h2>
   <p>The feed is the <strong>GitHub releases</strong> of <code>mashhadio/mashhad-releases</code>. The app is

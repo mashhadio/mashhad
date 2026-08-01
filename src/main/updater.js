@@ -29,6 +29,12 @@ const BREW_UPGRADE = 'brew upgrade mashhad';
 let autoUpdater = null;    // the electron-updater singleton, once initialised
 let macDownloadUrl = null; // direct .dmg link, set once a macOS update is found
 
+// Whether the user has pressed the banner's download button. electron-updater emits
+// 'error' for a failed *check* too, and an offline launch shouldn't nag — but once
+// someone has clicked, silence is wrong: the banner would just vanish. This lets the
+// renderer tell the two apart.
+let downloadRequested = false;
+
 // Last status pushed to the renderer. `webContents.send` is fire-and-forget and
 // `ipcRenderer.on` is not retroactive, so anything sent before the renderer has
 // wired up its listener is lost with no trace. Windows survives that by accident —
@@ -141,11 +147,12 @@ async function checkMacUpdate(send) {
 
   // An x64 build running under Rosetta should be offered the native arm64 one.
   const arch = process.arch === 'x64' && app.runningUnderARM64Translation ? 'arm64' : process.arch;
-  // Must match build.mac.artifactName in package.json. Renamed in 1.0.4 (the version
-  // dropped out — it is already in the tag this URL is built from). Clients on 1.0.3
-  // and earlier still ask for the old Mashhad-<version>-<arch>.dmg, so their banner's
-  // .dmg button 404s against a 1.0.4+ release; Homebrew is unaffected and is the
-  // route this banner recommends first.
+  // Must match build.mac.artifactName in package.json. The version dropped out of the
+  // filename — it is already in the tag this URL is built from — and 1.0.5 was the
+  // first release published that way (1.0.3 and 1.0.4 were built but never published,
+  // so no client ever saw those). Clients on 1.0.2 and earlier still ask for the old
+  // Mashhad-<version>-<arch>.dmg, so their banner's .dmg button 404s against a 1.0.5+
+  // release; Homebrew is unaffected and is the route this banner recommends first.
   macDownloadUrl = assetUrl(target, `Mashhad-${arch}.dmg`, `v${version}`);
   send({ state: 'manual', version, brew: BREW_UPGRADE });
 }
@@ -183,8 +190,14 @@ function initAutoUpdate(getWindow) {
 
   autoUpdater.on('update-available', (info) => send({ state: 'available', version: info && info.version }));
   autoUpdater.on('download-progress', (p) => send({ state: 'downloading', percent: Math.round((p && p.percent) || 0) }));
-  autoUpdater.on('update-downloaded', (info) => send({ state: 'ready', version: info && info.version }));
-  autoUpdater.on('error', (err) => { console.error('[update] error:', err && err.message); send({ state: 'error' }); });
+  autoUpdater.on('update-downloaded', (info) => { downloadRequested = false; send({ state: 'ready', version: info && info.version }); });
+  autoUpdater.on('error', (err) => {
+    console.error('[update] error:', err && err.message);
+    // `duringDownload` distinguishes "the check failed, stay quiet" from "the download
+    // the user asked for failed, tell them" — see downloadRequested.
+    send({ state: 'error', duringDownload: downloadRequested });
+    downloadRequested = false;
+  });
   // 'update-not-available' is intentionally silent — no banner when already current.
 
   autoUpdater.checkForUpdates().catch((err) => console.warn('[update] check failed:', err && err.message));
@@ -216,6 +229,7 @@ function startDownload() {
     return;
   }
   if (!autoUpdater) return;
+  downloadRequested = true;
   try {
     const p = autoUpdater.downloadUpdate();
     if (p && p.catch) p.catch((err) => console.error('[update] download failed:', err && err.message));

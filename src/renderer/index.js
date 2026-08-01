@@ -1439,7 +1439,21 @@ if (window.api.onUpdateStatus) {
     updateRestartBtn.disabled = true;
     window.api.restartToUpdate();
   });
-  updateDownloadBtn.addEventListener('click', () => window.api.downloadUpdate());
+  // Tracks the last state applied, so the click below knows whether pressing the
+  // button starts a real download (Windows/AppImage) or just opens a link (macOS).
+  let currentState = null;
+
+  updateDownloadBtn.addEventListener('click', () => {
+    // On Windows/AppImage this kicks off a ~100 MB download and the first progress
+    // event can be a second or two away. Without this the button looks inert, and a
+    // second click fires downloadUpdate() again. macOS only opens a link, so it stays
+    // clickable there.
+    if (currentState !== 'manual') {
+      updateDownloadBtn.disabled = true;
+      updateDetail.textContent = 'جارٍ بدء التنزيل…';
+    }
+    window.api.downloadUpdate();
+  });
   updateCopyBrewBtn.addEventListener('click', () => {
     window.api.copyBrewCommand();
     updateCopyBrewBtn.textContent = 'تم النسخ ✓';
@@ -1454,7 +1468,20 @@ if (window.api.onUpdateStatus) {
 
   const applyStatus = (s) => {
     if (!s || !s.state) return;
-    if (s.state === 'error') { updateBanner.classList.remove('active'); return; }
+    currentState = s.state;
+    if (s.state === 'error') {
+      // A failed *check* stays silent — an offline launch shouldn't nag. But once the
+      // user has pressed the button, hiding the banner would swallow their action with
+      // no explanation, so surface it and offer a retry (see duringDownload in updater.js).
+      if (!s.duringDownload) { updateBanner.classList.remove('active'); return; }
+      updateBanner.classList.add('active');
+      updateTitle.textContent = 'تعذّر تنزيل التحديث.';
+      updateDetail.textContent = 'تحقّق من اتّصالك بالإنترنت ثمّ حاول مرّة أخرى.';
+      updateDownloadBtn.textContent = 'إعادة المحاولة';
+      updateDownloadBtn.disabled = false;
+      show({ download: true });
+      return;
+    }
     updateBanner.classList.add('active');
     if (s.state === 'available') {
       // Nothing has been downloaded yet — autoDownload is off, so this button is
@@ -1462,6 +1489,7 @@ if (window.api.onUpdateStatus) {
       updateTitle.textContent = `يتوفّر تحديث جديد${s.version ? ` (${s.version})` : ''}.`;
       updateDetail.textContent = 'اضغط «تحديث الآن» لتنزيله وتثبيته.';
       updateDownloadBtn.textContent = 'تحديث الآن';
+      updateDownloadBtn.disabled = false;   // re-enable after a failed attempt
       show({ download: true });
     } else if (s.state === 'downloading') {
       updateDetail.textContent = `جارٍ تنزيل التحديث… ${s.percent || 0}%`;
@@ -1478,13 +1506,19 @@ if (window.api.onUpdateStatus) {
     }
   };
 
-  window.api.onUpdateStatus(applyStatus);
+  let sawPush = false;
+  window.api.onUpdateStatus((s) => { sawPush = true; applyStatus(s); });
 
   // main may have found an update before this listener existed — the mac check
   // sends exactly once, so a lost message means no banner at all. Ask for the
   // current status now that we're listening.
+  //
+  // Drop the answer if a push beat it here: the reply and the push travel on
+  // different IPC channels with no ordering guarantee between them, so a slow reply
+  // carrying `available` could otherwise land after `downloading` and put the button
+  // back while a download is already running.
   if (window.api.getUpdateStatus) {
-    window.api.getUpdateStatus().then(applyStatus).catch(() => {});
+    window.api.getUpdateStatus().then((s) => { if (!sawPush) applyStatus(s); }).catch(() => {});
   }
 }
 
