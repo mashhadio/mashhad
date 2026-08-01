@@ -4,7 +4,7 @@
    Used by index.html and download.html.
    ========================================================================== */
 (function(){
-  var VERSION = "1.0.6";
+  var VERSION = "1.0.7";
 
   // GitHub account that owns the PUBLIC `mashhad-releases` + `homebrew-mashhad`
   // repos. Change this one line if the account changes — everything below
@@ -23,7 +23,7 @@
   // real 140). One command, after publishing:
   //   gh api repos/mashhadio/mashhad-releases/releases --jq \
   //     '.[] | select(.tag_name=="vX.Y.Z") | .assets[] | "\(.name) \((.size/1048576)|floor)"'
-  // Measured on 1.0.6.
+  // Measured on 1.0.7 (unchanged from 1.0.6).
   var FILES = {
     win:       { name: "Mashhad.exe",        size: "~103 م.ب", url: BASE + "/Mashhad.exe" },
     mac_arm64: { name: "Mashhad-arm64.dmg",  size: "~118 م.ب", url: BASE + "/Mashhad-arm64.dmg" },

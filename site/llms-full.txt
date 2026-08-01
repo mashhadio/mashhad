@@ -14,7 +14,7 @@ The interface is Arabic and right-to-left throughout, designed natively in Arabi
 - Download: https://mashhad.io/download.html
 - Releases: https://github.com/mashhadio/mashhad-releases
 - Support: support@mashhad.io
-- Current version: 1.0.6
+- Current version: 1.0.7
 - Price: free
 - License: MIT
 
