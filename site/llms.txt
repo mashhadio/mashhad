@@ -4,10 +4,13 @@
 
 Mashhad is a desktop application, not a SaaS or a browser extension. Recording, editing, and exporting all happen locally on the user's machine — nothing is uploaded, and no account is required. The entire interface is Arabic and right-to-left, designed natively rather than translated. It is free to use, with in-app auto-update.
 
+Mashhad is built by Fareeqy (فريقي), the Arabic project, task, and team management platform at https://fareeqy.com.
+
 - Website: https://mashhad.io
 - Download: https://mashhad.io/download.html
 - Releases: https://github.com/mashhadio/mashhad-releases
 - Support: support@mashhad.io
+- Made by: Fareeqy (فريقي) — https://fareeqy.com
 - Current version: 1.0.7
 
 ## Product
@@ -47,6 +50,7 @@ Mashhad is a desktop application, not a SaaS or a browser extension. Recording, 
 
 ## Facts
 
+- Maker: Fareeqy (فريقي), https://fareeqy.com — an Arabic project, task, and team management platform. Mashhad is one of its products.
 - Price: free, no account, no subscription.
 - Interface language: Arabic only, fully right-to-left.
 - Privacy: recording, editing, and export run entirely on-device; no footage is uploaded. The network is used only to check for updates.

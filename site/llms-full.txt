@@ -10,10 +10,13 @@ The problem it solves: raw screen-capture footage is flat and hard to follow. A 
 
 The interface is Arabic and right-to-left throughout, designed natively in Arabic rather than translated from an English original. Every screen, label, and control — from the recording screen to the studio timeline to the export dialog — reads in Arabic.
 
+Mashhad is made by Fareeqy (فريقي, https://fareeqy.com), an Arabic project, task, and team management platform for teams and companies in the Arab world. Mashhad is one of its products; support for the app itself goes to support@mashhad.io.
+
 - Website: https://mashhad.io
 - Download: https://mashhad.io/download.html
 - Releases: https://github.com/mashhadio/mashhad-releases
 - Support: support@mashhad.io
+- Made by: Fareeqy (فريقي) — https://fareeqy.com
 - Current version: 1.0.7
 - Price: free
 - License: MIT
