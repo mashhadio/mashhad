@@ -251,35 +251,29 @@ section{padding:56px 0}
 .dl .sub{font-size:12px;color:var(--ink-soft);text-align:center}
 @media(max-width:820px){.dl-grid{grid-template-columns:1fr}}
 
-/* maker credit — «مشهد» is built by «فريقي». One quiet card at the top of the
-   footer, in Fareeqy's own teal so it reads as a second brand rather than a
-   Mashhad UI element. Kept out of the nav and the hero on purpose: attribution,
-   not a cross-promotion. */
-.maker{display:flex;align-items:center;gap:16px;flex-wrap:wrap;background:var(--card);
-  border:1px solid var(--line);border-radius:16px;padding:16px 20px;margin-bottom:30px;
-  transition:border-color .14s,box-shadow .14s,transform .14s}
-.maker:hover{border-color:color-mix(in srgb,var(--fq) 40%,var(--line));
-  box-shadow:0 12px 28px -16px color-mix(in srgb,var(--fq) 65%,transparent);transform:translateY(-1px)}
-.maker .mk-mark{flex:none;width:44px;height:44px}
+/* maker credit — «مشهد» is built by «فريقي». A signature rather than a card: a
+   short rule, the Fareeqy lockup at text scale, the domain beneath. It sits
+   between the support line and the copyright row so it reads as part of the
+   footer, not an ad stapled to the bottom of it. No box, no fill, no shadow —
+   the credit signs the work instead of advertising inside it. Kept out of the
+   nav and the hero on purpose: attribution, not cross-promotion. */
+.maker{text-align:center;padding:4px 0 30px}
+.maker .mk-rule{width:54px;height:1px;background:var(--line);margin:0 auto 24px}
+.maker .mk-line{display:inline-flex;align-items:center;gap:12px;font-size:15px;color:var(--ink-soft)}
 /* The svg also carries width/height attributes. site.css ships with max-age=600,
    so a returning visitor can hold a stale stylesheet while the new markup is
-   already served — with no rule and no attribute the mark would size to its
-   container and swallow the footer. The attributes keep it 44px unstyled. */
-.maker .mk-mark svg{display:block;width:100%;height:100%}
-.maker .mk-tx{display:flex;flex-direction:column;gap:2px;min-width:0;line-height:1.55}
-.maker .mk-tx b{font-size:15.5px;font-weight:800;color:var(--ink)}
-.maker .mk-tx span{font-size:13px;color:var(--ink-soft)}
-.maker .mk-go{margin-inline-start:auto;display:inline-flex;align-items:center;gap:8px;flex:none;
-  font-size:14px;font-weight:700;color:var(--fq)}
-.maker .mk-go .dom{direction:ltr;unicode-bidi:isolate}
-.maker .mk-go .arw{transition:transform .12s}
-.maker:hover .mk-go{color:var(--fq-deep)}
-.maker:hover .mk-go .arw{transform:translateX(-4px)}
+   already served — with no rule and no attribute the logo would size to its
+   container and swallow the footer. The attributes keep it 26px unstyled. */
+.maker .mk-line svg{flex:none;display:block}
+.maker .mk-line b{font-family:"Thmanyah Serif Display","Thmanyah Sans",serif;font-weight:700;
+  font-size:20px;color:var(--ink);letter-spacing:-.01em}
+.maker .mk-dom{display:block;margin-top:8px;font-size:12.5px;font-weight:700;letter-spacing:.05em;
+  color:var(--fq);direction:ltr;transition:color .14s}
+.maker a:hover .mk-dom{color:var(--fq-deep);text-decoration:underline;text-underline-offset:3px}
 @media(max-width:620px){
-  .maker{gap:13px;padding:15px 16px}
-  .maker .mk-mark{width:38px;height:38px}
-  .maker .mk-tx b{font-size:14.5px}
-  .maker .mk-go{width:100%;margin-inline-start:0;font-size:13.5px}
+  .maker{padding-bottom:26px}
+  .maker .mk-line{gap:10px;font-size:14px}
+  .maker .mk-line b{font-size:18px}
 }
 
 footer.ft{padding:40px 0;color:var(--ink-soft);font-size:14px}
