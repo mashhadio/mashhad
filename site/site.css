@@ -261,6 +261,10 @@ section{padding:56px 0}
 .maker:hover{border-color:color-mix(in srgb,var(--fq) 40%,var(--line));
   box-shadow:0 12px 28px -16px color-mix(in srgb,var(--fq) 65%,transparent);transform:translateY(-1px)}
 .maker .mk-mark{flex:none;width:44px;height:44px}
+/* The svg also carries width/height attributes. site.css ships with max-age=600,
+   so a returning visitor can hold a stale stylesheet while the new markup is
+   already served — with no rule and no attribute the mark would size to its
+   container and swallow the footer. The attributes keep it 44px unstyled. */
 .maker .mk-mark svg{display:block;width:100%;height:100%}
 .maker .mk-tx{display:flex;flex-direction:column;gap:2px;min-width:0;line-height:1.55}
 .maker .mk-tx b{font-size:15.5px;font-weight:800;color:var(--ink)}
