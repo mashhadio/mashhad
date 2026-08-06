@@ -16,6 +16,7 @@ Mashhad is made by Fareeqy (فريقي, https://fareeqy.com), an Arabic project,
 - Download: https://mashhad.io/download.html
 - Releases: https://github.com/mashhadio/mashhad-releases
 - Support: support@mashhad.io
+- Community: https://t.me/fareeqycommunity — Fareeqy's Telegram community, where updates and ideas are shared before launch.
 - Made by: Fareeqy (فريقي) — https://fareeqy.com
 - Current version: 1.0.7
 - Price: free

@@ -52,6 +52,11 @@ header.nav{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--p
 .btn-red{background:var(--red);color:#fff;box-shadow:0 6px 18px rgba(226,59,46,.28)}
 .btn-gold{background:var(--gold);color:#fff;box-shadow:0 8px 20px rgba(44,62,80,.30)}
 .btn-gold:hover{background:var(--gold-deep);color:#fff}
+/* «فريقي»'s teal. The two button colours carry ownership, not decoration: navy
+   for «مشهد» actions, teal for the maker's. */
+.btn-fq{background:var(--fq);color:#fff;box-shadow:0 8px 20px rgba(0,98,87,.26)}
+.btn-fq:hover{background:var(--fq-deep);color:#fff}
+.btn-fq svg{flex:none;display:block}
 .btn-lg{padding:14px 26px;font-size:16px;border-radius:14px}
 /* download button with file name/size inside it */
 .btn-dl{flex-direction:row;align-items:center;gap:13px;padding:12px 24px;text-align:start}
@@ -250,6 +255,39 @@ section{padding:56px 0}
 .dl .btn{justify-content:center;width:100%}
 .dl .sub{font-size:12px;color:var(--ink-soft);text-align:center}
 @media(max-width:820px){.dl-grid{grid-template-columns:1fr}}
+
+/* ===== community strip — «فريقي»'s Telegram room =====
+   Deliberately quieter than the download band above it and louder than a footer
+   link: it's the step after the conversion, not a rival to it. So it's an inset
+   strip in the page's own paper flow rather than a third full-bleed band, and it
+   runs at teal to read as «فريقي» speaking, which the maker credit right beneath
+   picks up. Tightened vertical padding — it belongs to the footer's territory,
+   not to the sections above. */
+.community{padding:44px 0 10px}
+/* 880px is the FAQ column's measure — matching it lines the strip up with the
+   section above and closes the dead air that opens between the text and the
+   button at full width. */
+.comm-in{display:flex;align-items:center;gap:20px;max-width:880px;margin:0 auto;padding:24px 28px;border-radius:20px;
+  background:color-mix(in srgb,var(--fq) 5%,var(--card));
+  border:1px solid color-mix(in srgb,var(--fq) 22%,transparent);
+  box-shadow:0 14px 34px -26px rgba(0,98,87,.55)}
+.comm-ic{flex:none;width:52px;height:52px;border-radius:15px;display:grid;place-items:center;font-size:25px;
+  background:color-mix(in srgb,var(--fq) 11%,var(--paper));
+  border:1px solid color-mix(in srgb,var(--fq) 24%,transparent)}
+.comm-tx{min-width:0}
+.comm-tx h2{margin:0 0 2px;font-family:"Thmanyah Serif Display","Thmanyah Sans",serif;
+  font-size:22px;font-weight:700;line-height:1.35;letter-spacing:-.01em}
+.comm-tx p{margin:0;color:var(--ink-soft);font-size:14.5px;max-width:62ch}
+.community .btn-fq{margin-inline-start:auto;flex:none}
+@media(max-width:760px){
+  .community{padding:36px 0 6px}
+  .comm-in{flex-wrap:wrap;align-items:flex-start;gap:14px 16px;padding:22px 20px}
+  .comm-ic{width:44px;height:44px;font-size:21px;border-radius:13px}
+  .comm-tx{flex:1 1 190px}
+  .comm-tx h2{font-size:19px}
+  .comm-tx p{font-size:14px}
+  .community .btn-fq{flex:1 0 100%;margin-inline-start:0;justify-content:center}
+}
 
 /* maker credit — «مشهد» is made by «فريقي», and hierarchy carries the message:
    the product wordmark leads, the maker hangs beneath it in small type. No box,

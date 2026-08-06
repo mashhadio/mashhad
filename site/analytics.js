@@ -61,6 +61,10 @@
           file_name: href.split("/").pop(),
           link_url: href
         });
+      } else if(href.indexOf("t.me/") !== -1){
+        // Joining leaves for Telegram, so the click is the only signal the site
+        // ever sees for it.
+        gtag("event", "join_community", { link_url: href });
       }
       return;
     }
